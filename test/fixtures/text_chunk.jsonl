@@ -1,0 +1,1 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"Hello, world!"}],"usage":{"input_tokens":100,"output_tokens":25,"cache_creation_input_tokens":5000,"cache_read_input_tokens":3000}},"session_id":"test-session-001"}

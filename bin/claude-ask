@@ -1,0 +1,1319 @@
+#!/bin/bash
+#
+# claude-ask - Ask Claude a question from the terminal with a styled status bar
+#
+# Usage: claude-ask [OPTIONS] ["question"]
+#
+# Options:
+#   --theme THEME      Status bar theme: minimal, bubbles, powerline (default: minimal)
+#   --pager CMD        Pager command for markdown output (default: bat --color=always -l markdown --paging=never --wrap=auto)
+#   --no-pager         Disable pager, output raw text
+#   --demo-themes       Show example status bars for all themes and exit
+#   --demo-output       Simulate streaming with mock responses (small/medium/large) and exit
+#   --no-stream        Don't stream output; show status bar only, render markdown when complete
+#   --save-raw         Save raw JSON stream instead of parsed format
+#   --history          List saved sessions
+#   --session [ID|N]   View a saved session by name/id or index number
+#   --debug-log [FILE] Write debug messages to FILE (default: /tmp/claude-ask.log)
+#   -h, --help         Show this help message
+#
+# Examples:
+#   claude-ask                                    # opens $EDITOR to compose question
+#   claude-ask "What is the capital of France?"
+#   claude-ask --theme powerline "Explain git rebase"
+#   claude-ask --demo-themes
+#   claude-ask --no-pager "List common bash shortcuts"
+#   claude-ask --history                          # list saved sessions
+#   claude-ask --session 1                        # view most recent session
+#   claude-ask --session git-bare                 # view session by name
+#   claude-ask --debug-log "What is 2+2?"         # enable debug logging
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+THEME="minimal"
+# PAGER_CMD="bat --color=always -l markdown --paging=never --wrap=auto"
+PAGER_CMD='command nvimpager -c -- -c "colorscheme nord-nick | set termguicolors | set ft=markdown"'
+USE_PAGER=1
+STREAM_OUTPUT=1
+SAVE_RAW=0
+DEMO_THEMES=0
+DEMO_OUTPUT=0
+SHOW_HISTORY=0
+VIEW_SESSION=""
+DEBUG_LOG=""
+MAX_DISPLAY_NAME=20
+SESSION_DIR="${SESSION_DIR:-$HOME/.local/share/claude/cli-sessions}"
+
+# ---------------------------------------------------------------------------
+# Debug logging (must be defined before arg parsing)
+# ---------------------------------------------------------------------------
+debug_log() {
+  [[ -z "${DEBUG_LOG:-}" ]] && return
+  printf '[%s] %s\n' "$(date '+%H:%M:%S.%3N')" "$*" >> "$DEBUG_LOG"
+}
+
+# ---------------------------------------------------------------------------
+# CLI argument parsing
+# ---------------------------------------------------------------------------
+usage() {
+  sed -n '2,/^$/s/^# \{0,1\}//p' "$0"
+  exit 0
+}
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --theme)
+      [[ $# -lt 2 ]] && {
+        echo "Error: --theme requires an argument" >&2
+        exit 1
+      }
+      THEME="$2"
+      if [[ ! "$THEME" =~ ^(minimal|bubbles|powerline)$ ]]; then
+        echo "Error: --theme must be one of: minimal, bubbles, powerline" >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --pager)
+      [[ $# -lt 2 ]] && {
+        echo "Error: --pager requires an argument" >&2
+        exit 1
+      }
+      PAGER_CMD="$2"
+      shift 2
+      ;;
+    --no-pager)
+      USE_PAGER=0
+      shift
+      ;;
+    --demo-themes)
+      DEMO_THEMES=1
+      shift
+      ;;
+    --demo-output)
+      DEMO_OUTPUT=1
+      shift
+      ;;
+    --no-stream)
+      STREAM_OUTPUT=0
+      shift
+      ;;
+    --save-raw)
+      SAVE_RAW=1
+      shift
+      ;;
+    --history)
+      SHOW_HISTORY=1
+      shift
+      ;;
+    --session)
+      if [[ $# -ge 2 && ! "$2" =~ ^- ]]; then
+        VIEW_SESSION="$2"
+        shift 2
+      else
+        VIEW_SESSION="__SHOW_HISTORY__"
+        shift
+      fi
+      ;;
+    --debug-log)
+      if [[ $# -ge 2 && ! "$2" =~ ^- ]]; then
+        DEBUG_LOG="$2"
+        shift 2
+      else
+        DEBUG_LOG="/tmp/claude-ask.log"
+        shift
+      fi
+      ;;
+    -h | --help)
+      usage
+      ;;
+    --)
+      shift
+      POSITIONAL+=("$@")
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      exit 1
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+
+debug_log "args parsed: THEME=$THEME USE_PAGER=$USE_PAGER SAVE_RAW=$SAVE_RAW SHOW_HISTORY=$SHOW_HISTORY VIEW_SESSION=$VIEW_SESSION"
+
+if [[ "$DEMO_THEMES" -eq 0 && "$DEMO_OUTPUT" -eq 0 && "$SHOW_HISTORY" -eq 0 && -z "$VIEW_SESSION" && ${#POSITIONAL[@]} -eq 0 ]]; then
+  # No question provided -- open $EDITOR for interactive input
+  debug_log "no positional args, opening editor"
+  tmpfile="$(mktemp "${TMPDIR:-/tmp}/claude-ask-XXXXXX")"
+  "${EDITOR:-vi}" "$tmpfile"
+  question="$(cat "$tmpfile")"
+  rm -f "$tmpfile"
+  debug_log "editor returned, question_len=${#question}"
+  if [[ ! "$question" =~ [^[:space:]] ]]; then
+    echo "No question provided." >&2
+    exit 1
+  fi
+else
+  question="${POSITIONAL[*]:-}"
+fi
+
+# ---------------------------------------------------------------------------
+# Catppuccin Mocha palette -> ANSI 256/truecolor escape sequences
+# Using truecolor (24-bit) since modern terminals support it
+# ---------------------------------------------------------------------------
+# Foreground: \e[38;2;R;G;Bm   Background: \e[48;2;R;G;Bm
+RST=$'\e[0m'
+BOLD=$'\e[1m'
+ITALIC=$'\e[3m'
+
+# Palette colors (catppuccin mocha)
+FG_CLAUDE=$'\e[38;2;217;119;87m' # #D97757
+BG_CLAUDE=$'\e[48;2;49;50;68m'   # #313244
+
+FG_MODEL=$'\e[38;2;116;199;236m' # #74c7ec
+BG_MODEL=$'\e[48;2;30;30;46m'    # #1e1e2e
+
+FG_CONTEXT=$'\e[38;2;250;179;135m' # #fab387
+BG_CONTEXT=$'\e[48;2;49;50;68m'    # #313244
+
+FG_COST=$'\e[38;2;166;227;161m' # #a6e3a1
+BG_COST=$'\e[48;2;69;71;90m'    # #45475a
+
+FG_TOKENS=$'\e[38;2;137;220;235m' # #89dceb (directory color reused)
+BG_TOKENS=$'\e[48;2;30;30;46m'    # #1e1e2e
+
+FG_DURATION=$'\e[38;2;235;160;172m' # #eba0ac (git_branch color reused)
+BG_DURATION=$'\e[48;2;49;50;68m'    # #313244
+
+FG_DIM=$'\e[38;2;108;112;134m' # #6c7086 overlay0
+
+# Separator characters for themed transitions
+# Bubbles: round caps    Powerline: angular arrows
+SEP_BUBBLE_LEFT=$'\ue0b6'  #
+SEP_BUBBLE_RIGHT=$'\ue0b4' #
+SEP_POWERLINE=$'\ue0b0'    #
+
+# Spinner frames
+SPINNER=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+
+# ---------------------------------------------------------------------------
+# Theme renderers
+# Each takes: spinner_char model tokens_in tokens_out cost duration status
+# ---------------------------------------------------------------------------
+render_minimal() {
+  local spin="$1" model="$2" tok_in="$3" tok_out="$4" cost="$5" dur="$6" status="$7"
+  local line=""
+  line+="${FG_CLAUDE}${spin}${RST} "
+  line+="${FG_MODEL}${model}${RST}"
+  if [[ -n "$tok_in" ]]; then
+    line+=" ${FG_DIM}|${RST} ${FG_TOKENS}in:${tok_in}${RST}"
+  fi
+  if [[ -n "$tok_out" ]]; then
+    line+=" ${FG_TOKENS}out:${tok_out}${RST}"
+  fi
+  if [[ -n "$cost" ]]; then
+    line+=" ${FG_DIM}|${RST} ${FG_COST}${cost}${RST}"
+  fi
+  if [[ -n "$dur" ]]; then
+    line+=" ${FG_DIM}|${RST} ${FG_DURATION}${dur}${RST}"
+  fi
+  if [[ "$status" == "done" ]]; then
+    line+=" ${FG_DIM}|${RST} ${FG_COST}done${RST}"
+  fi
+  printf '%s' "$line"
+}
+
+render_bubbles() {
+  local spin="$1" model="$2" tok_in="$3" tok_out="$4" cost="$5" dur="$6" status="$7"
+  local line=""
+
+  # Claude bubble (spinner + model)
+  line+="${FG_CLAUDE}${SEP_BUBBLE_LEFT}${BG_CLAUDE} ${FG_CLAUDE}${spin} ${FG_MODEL}${model} ${RST}${FG_CLAUDE}${SEP_BUBBLE_RIGHT}${RST}"
+
+  # Tokens bubble
+  if [[ -n "$tok_in" || -n "$tok_out" ]]; then
+    local tok_str=""
+    [[ -n "$tok_in" ]] && tok_str+="in:${tok_in}"
+    [[ -n "$tok_out" ]] && tok_str+=" out:${tok_out}"
+    line+=" ${FG_TOKENS}${SEP_BUBBLE_LEFT}${BG_TOKENS} ${FG_TOKENS}${tok_str} ${RST}${FG_TOKENS}${SEP_BUBBLE_RIGHT}${RST}"
+  fi
+
+  # Cost bubble
+  if [[ -n "$cost" ]]; then
+    line+=" ${FG_COST}${SEP_BUBBLE_LEFT}${BG_COST} ${FG_COST}${cost} ${RST}${FG_COST}${SEP_BUBBLE_RIGHT}${RST}"
+  fi
+
+  # Duration bubble
+  if [[ -n "$dur" ]]; then
+    line+=" ${FG_DURATION}${SEP_BUBBLE_LEFT}${BG_DURATION} ${FG_DURATION}${dur} ${RST}${FG_DURATION}${SEP_BUBBLE_RIGHT}${RST}"
+  fi
+
+  # Status indicator
+  if [[ "$status" == "done" ]]; then
+    line+=" ${FG_COST}${SEP_BUBBLE_LEFT}${BG_COST} ${FG_COST}done ${RST}${FG_COST}${SEP_BUBBLE_RIGHT}${RST}"
+  fi
+
+  printf '%s' "$line"
+}
+
+render_powerline() {
+  local spin="$1" model="$2" tok_in="$3" tok_out="$4" cost="$5" dur="$6" status="$7"
+  local line=""
+
+  # Decorative start + claude segment
+  line+="${FG_CLAUDE}░▒▓${BG_CLAUDE} ${FG_CLAUDE}${spin} ${FG_MODEL}${model} ${RST}"
+
+  # Tokens segment
+  if [[ -n "$tok_in" || -n "$tok_out" ]]; then
+    local tok_str=""
+    [[ -n "$tok_in" ]] && tok_str+="in:${tok_in}"
+    [[ -n "$tok_out" ]] && tok_str+=" out:${tok_out}"
+    line+="${BG_TOKENS}${FG_CLAUDE}${SEP_POWERLINE}${RST}${BG_TOKENS} ${FG_TOKENS}${tok_str} ${RST}"
+  fi
+
+  # Cost segment
+  if [[ -n "$cost" ]]; then
+    local prev_bg="${BG_TOKENS}"
+    [[ -z "$tok_in" && -z "$tok_out" ]] && prev_bg="${BG_CLAUDE}"
+    line+="${BG_COST}${FG_TOKENS}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}${cost} ${RST}"
+  fi
+
+  # Duration segment
+  if [[ -n "$dur" ]]; then
+    line+="${BG_DURATION}${FG_COST}${SEP_POWERLINE}${RST}${BG_DURATION} ${FG_DURATION}${dur} ${RST}"
+  fi
+
+  # Status / end cap
+  if [[ "$status" == "done" ]]; then
+    line+="${BG_COST}${FG_DURATION}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}done ${RST}${FG_COST}${SEP_POWERLINE}${RST}"
+  else
+    # End cap from last segment
+    local end_fg="${FG_DURATION}"
+    [[ -z "$dur" ]] && end_fg="${FG_COST}"
+    [[ -z "$cost" && -z "$dur" ]] && end_fg="${FG_TOKENS}"
+    [[ -z "$tok_in" && -z "$tok_out" && -z "$cost" && -z "$dur" ]] && end_fg="${FG_CLAUDE}"
+    line+="${end_fg}${SEP_POWERLINE}${RST}"
+  fi
+
+  printf '%s' "$line"
+}
+
+render_status_bar() {
+  case "$THEME" in
+    minimal) render_minimal "$@" ;;
+    bubbles) render_bubbles "$@" ;;
+    powerline) render_powerline "$@" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Format helpers
+# ---------------------------------------------------------------------------
+format_tokens() {
+  local n="$1"
+  if [[ -z "$n" || "$n" == "0" ]]; then
+    echo ""
+    return
+  fi
+  if [[ "$n" -ge 1000000 ]]; then
+    printf '%.1fM' "$(echo "scale=1; $n / 1000000" | bc)"
+  elif [[ "$n" -ge 1000 ]]; then
+    printf '%.1fk' "$(echo "scale=1; $n / 1000" | bc)"
+  else
+    echo "$n"
+  fi
+}
+
+format_duration() {
+  local ms="$1"
+  if [[ -z "$ms" ]]; then
+    echo ""
+    return
+  fi
+  if [[ "$ms" -ge 60000 ]]; then
+    printf '%dm%ds' "$((ms / 60000))" "$(((ms % 60000) / 1000))"
+  elif [[ "$ms" -ge 1000 ]]; then
+    printf '%.1fs' "$(echo "scale=1; $ms / 1000" | bc)"
+  else
+    printf '%dms' "$ms"
+  fi
+}
+
+format_cost() {
+  local c="$1"
+  if [[ -z "$c" ]]; then
+    echo ""
+    return
+  fi
+  printf '$%.4f' "$c"
+}
+
+format_count() {
+  local n="$1"
+  [[ -z "$n" ]] && n=0
+  if [[ "$n" -ge 1000000 ]]; then
+    printf '%.1fM' "$(echo "scale=1; $n / 1000000" | bc)"
+  elif [[ "$n" -ge 1000 ]]; then
+    printf '%.1fk' "$(echo "scale=1; $n / 1000" | bc)"
+  else
+    echo "$n"
+  fi
+}
+
+format_elapsed() {
+  local secs="$1"
+  [[ -z "$secs" || "$secs" -le 0 ]] && {
+    echo "0s"
+    return
+  }
+  if [[ "$secs" -ge 3600 ]]; then
+    printf '%dh%dm' "$((secs / 3600))" "$(((secs % 3600) / 60))"
+  elif [[ "$secs" -ge 60 ]]; then
+    printf '%dm%ds' "$((secs / 60))" "$((secs % 60))"
+  else
+    printf '%ds' "$secs"
+  fi
+}
+
+render_stream_info() {
+  local lines="$1" chars="$2" chunks="$3" elapsed="$4" is_done="$5" is_thinking="${6:-0}"
+  local info="  ${FG_DIM}"
+  if [[ "$is_thinking" -eq 1 && "$is_done" != "done" ]]; then
+    info+="thinking... ${FG_DIM}|${RST}${FG_DIM} "
+  fi
+  info+="${lines} lines ${FG_DIM}|${RST}${FG_DIM} "
+  info+="$(format_count "$chars") chars ${FG_DIM}|${RST}${FG_DIM} "
+  info+="${chunks} chunks"
+  if [[ "$is_done" != "done" && -n "$elapsed" ]]; then
+    info+=" ${FG_DIM}|${RST}${FG_DIM} $(format_elapsed "$elapsed")"
+  fi
+  info+="${RST}"
+  printf '%s' "$info"
+}
+
+# ---------------------------------------------------------------------------
+# Theme demo mode: show all themes with sample data and exit
+# ---------------------------------------------------------------------------
+run_theme_demo() {
+  local themes=("minimal" "bubbles" "powerline")
+  local sample_spin="⠹"
+  local sample_model="opus"
+  local sample_in="19.9k"
+  local sample_out="275"
+  local sample_cost='$0.0950'
+  local sample_dur="7.4s"
+
+  for theme in "${themes[@]}"; do
+    echo "${BOLD}${theme}${RST}"
+
+    # In-progress state (with spinner)
+    THEME="$theme"
+    printf '  streaming: '
+    local idx=0
+    for i in {1..10}; do
+      local s="${SPINNER[$idx]}"
+      printf '\r  streaming: '
+      render_status_bar "$s" "$sample_model" "$sample_in" "$sample_out" "" "" "running"
+      idx=$(((idx + 1) % ${#SPINNER[@]}))
+      sleep 0.08
+    done
+    printf '\n'
+
+    # Finished state
+    printf '  finished:  '
+    render_status_bar "✓" "$sample_model" "$sample_in" "$sample_out" "$sample_cost" "$sample_dur" "done"
+    printf '\n\n'
+  done
+}
+
+if [[ "$DEMO_THEMES" -eq 1 ]]; then
+  run_theme_demo
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Mock stream-json data generator for demo-output mode
+# Generates realistic stream-json events with configurable size and delay.
+# Usage: generate_mock_stream SIZE [DELAY]
+#   SIZE:  small, medium, large
+#   DELAY: seconds between chunks (default: 0.05)
+# ---------------------------------------------------------------------------
+MOCK_SMALL_TEXT='The capital of France is **Paris**.'
+MOCK_MEDIUM_TEXT='## The Capital of France
+
+The capital of France is **Paris**. It is located in northern France on the River Seine.
+
+### Key Facts
+
+- **Population**: ~2.1 million (city proper), ~12 million (metro area)
+- **Founded**: 3rd century BC (as Lutetia)
+- **Area**: 105.4 km²
+
+### Notable Landmarks
+
+1. **Eiffel Tower** - Built in 1889, standing 330 meters tall
+2. **Louvre Museum** - Home to the Mona Lisa and 380,000 objects
+3. **Notre-Dame Cathedral** - Gothic masterpiece begun in 1163
+4. **Arc de Triomphe** - Honors those who fought for France
+
+### Code Example
+
+```python
+cities = {"France": "Paris", "Germany": "Berlin", "Spain": "Madrid"}
+print(f"The capital is {cities['"'"'France'"'"']}")
+```
+
+Paris has been the capital since the 10th century and remains the political,
+economic, and cultural center of France.'
+
+MOCK_LARGE_TEXT='## Comprehensive Guide to France'\''s Capital
+
+### Introduction
+
+The capital of France is **Paris**, one of the most visited cities in the world.
+Located in northern France on the River Seine, Paris has been the nation'\''s
+capital since the Capetian dynasty established it in the 10th century.
+
+### Geography and Climate
+
+Paris sits in the **Ile-de-France** region at approximately 48.8566°N, 2.3522°E.
+The city proper covers 105.4 km² and is divided into 20 arrondissements that
+spiral outward from the center like a snail shell.
+
+| Season | Avg High | Avg Low | Rainfall |
+|--------|----------|---------|----------|
+| Spring | 16°C     | 7°C     | 50mm     |
+| Summer | 25°C     | 15°C    | 55mm     |
+| Autumn | 16°C     | 8°C     | 55mm     |
+| Winter | 7°C      | 2°C     | 50mm     |
+
+### Historical Timeline
+
+1. **3rd century BC** - Celtic Parisii tribe settles on Ile de la Cite
+2. **52 BC** - Romans conquer and rename it Lutetia
+3. **508 AD** - Clovis I makes Paris capital of the Frankish kingdom
+4. **1163** - Construction of Notre-Dame Cathedral begins
+5. **1789** - French Revolution begins with the storming of the Bastille
+6. **1889** - Eiffel Tower built for the World'\''s Fair
+7. **1900** - Paris Metro opens its first line
+8. **1944** - Liberation of Paris from Nazi occupation
+9. **2024** - Paris hosts the Summer Olympic Games
+
+### Cultural Significance
+
+Paris is often called the **"City of Light"** (La Ville Lumiere), a nickname that
+dates back to the Age of Enlightenment and the city'\''s early adoption of street
+lighting.
+
+#### Museums and Galleries
+
+- **Louvre Museum**: World'\''s largest art museum with 380,000+ objects
+- **Musee d'\''Orsay**: Impressionist masterpieces in a former railway station
+- **Centre Pompidou**: Modern and contemporary art
+- **Rodin Museum**: Sculptures including The Thinker
+
+#### Architecture Styles
+
+```
+Gothic       -> Notre-Dame, Sainte-Chapelle (12th-14th century)
+Renaissance  -> Fontainebleau influence (16th century)
+Baroque      -> Les Invalides, Val-de-Grace (17th century)
+Haussmann    -> Boulevard redesign (19th century)
+Art Nouveau  -> Metro entrances, department stores (early 20th)
+Modern       -> La Defense, Fondation Louis Vuitton (20th-21st)
+```
+
+### Transportation
+
+The Paris Metro system has **16 lines** and **302 stations**, making it one of
+the densest metro networks in the world. The RER commuter rail extends service
+to the greater Ile-de-France region.
+
+```bash
+# Example: finding a route
+metro_lines=("1:La Defense-Chateau de Vincennes"
+             "4:Porte de Clignancourt-Mairie de Montrouge"
+             "6:Charles de Gaulle Etoile-Nation"
+             "14:Saint-Lazare-Olympiades")
+
+for line in "${metro_lines[@]}"; do
+  number="${line%%:*}"
+  route="${line#*:}"
+  echo "Line $number: $route"
+done
+```
+
+### Economy
+
+Paris and the Ile-de-France region generate approximately **31% of France'\''s GDP**.
+Major industries include:
+
+- Finance and banking (La Defense business district)
+- Fashion and luxury goods (LVMH, Kering, Hermes)
+- Technology (Station F startup campus)
+- Tourism (~30 million international visitors annually)
+- Aerospace (nearby facilities for Airbus, Safran)
+
+### Summary
+
+Paris continues to evolve while preserving its rich heritage. From the medieval
+streets of the Marais to the modern towers of La Defense, the city bridges
+centuries of history with contemporary innovation.'
+
+generate_mock_stream() {
+  local size="${1:-small}" delay="${2:-0.05}"
+  local mock_text input_tokens output_tokens cost duration_ms
+  local chunk_size=80
+
+  case "$size" in
+    small)
+      mock_text="$MOCK_SMALL_TEXT"
+      input_tokens=150
+      output_tokens=20
+      cost="0.001200"
+      duration_ms=1200
+      ;;
+    medium)
+      mock_text="$MOCK_MEDIUM_TEXT"
+      input_tokens=500
+      output_tokens=275
+      cost="0.012345"
+      duration_ms=4500
+      ;;
+    large)
+      mock_text="$MOCK_LARGE_TEXT"
+      input_tokens=1200
+      output_tokens=850
+      cost="0.045600"
+      duration_ms=12000
+      ;;
+    *)
+      echo "Error: --demo-output size must be small, medium, or large" >&2
+      return 1
+      ;;
+  esac
+
+  # System init
+  printf '{"type":"system","subtype":"init","cwd":"/tmp","session_id":"demo-%s","model":"claude-opus-4-6[1m]"}\n' "$size"
+  sleep "$delay"
+
+  # Thinking event
+  printf '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Let me think about this question."}],"usage":{"input_tokens":%d,"output_tokens":0}},"session_id":"demo-%s"}\n' "$input_tokens" "$size"
+  sleep "$delay"
+
+  # Stream text in chunks
+  local text_len=${#mock_text}
+  local offset=0 running_out=0
+  while [[ $offset -lt $text_len ]]; do
+    local chunk="${mock_text:$offset:$chunk_size}"
+    running_out=$((running_out + ${#chunk} / 4))
+    # Escape the chunk for JSON: handle backslashes, quotes, newlines, tabs
+    local json_chunk
+    json_chunk=$(printf '%s' "$chunk" | jq -Rs '.')
+    # jq -Rs wraps in quotes; strip outer quotes for embedding
+    json_chunk="${json_chunk:1:${#json_chunk}-2}"
+    printf '{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}],"usage":{"input_tokens":%d,"output_tokens":%d}},"session_id":"demo-%s"}\n' \
+      "$json_chunk" "$input_tokens" "$running_out" "$size"
+    offset=$((offset + chunk_size))
+    sleep "$delay"
+  done
+
+  # Result
+  printf '{"type":"result","subtype":"success","is_error":false,"duration_ms":%d,"duration_api_ms":%d,"num_turns":1,"result":"","total_cost_usd":%s,"usage":{"input_tokens":%d,"output_tokens":%d}}\n' \
+    "$duration_ms" "$((duration_ms - 100))" "$cost" "$input_tokens" "$output_tokens"
+}
+
+run_demo_output() {
+  local sizes=("small" "medium" "large")
+  local modes=()
+
+  if [[ "$STREAM_OUTPUT" -eq 1 ]]; then
+    modes+=("stream")
+  fi
+  modes+=("batch")
+
+  for mode in "${modes[@]}"; do
+    for size in "${sizes[@]}"; do
+      printf '\n%s%s response (%s mode)%s\n' "$BOLD" "$size" "$mode" "$RST"
+      printf '%s%s%s\n' "$FG_DIM" "$(printf '%.0s─' {1..50})" "$RST"
+
+      # Set mode for this run
+      local save_stream="$STREAM_OUTPUT"
+      if [[ "$mode" == "batch" ]]; then
+        STREAM_OUTPUT=0
+      else
+        STREAM_OUTPUT=1
+      fi
+
+      # Feed mock data through the same pipeline the real CLI uses
+      # We replicate the main loop inline to avoid needing the real claude binary
+
+      # Reset state
+      model=""
+      session_id=""
+      spinner_idx=0
+      input_tokens=""
+      output_tokens=""
+      cache_creation_tokens=""
+      cache_read_tokens=""
+      cost=""
+      duration_ms=""
+      answer_text=""
+      status="running"
+      CURSOR_COL=1
+      STATUS_BAR_VISIBLE=0
+      answer_lines=0
+      answer_chars=0
+      text_chunks=0
+      is_thinking=0
+      STREAM_START=$SECONDS
+
+      # Set up bat pipe if streaming with pager
+      local demo_bat_fifo="" demo_bat_out_fd="" demo_bat_pid=""
+      if [[ "$USE_PAGER" -eq 1 && "$STREAM_OUTPUT" -eq 1 ]]; then
+        demo_bat_fifo=$(mktemp -u /tmp/claude-ask-demo-bat.XXXXXX)
+        mkfifo "$demo_bat_fifo"
+        exec {demo_bat_out_fd}< <($PAGER_CMD < "$demo_bat_fifo" 2> /dev/null)
+        demo_bat_pid=$!
+        exec 3> "$demo_bat_fifo"
+        BAT_OUT_FD="$demo_bat_out_fd"
+      else
+        BAT_OUT_FD=""
+      fi
+
+      spin_char="${SPINNER[$spinner_idx]}"
+      update_status_bar "$spin_char" "connecting..." "" "" "" "" "running"
+
+      while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        line_type=$(printf '%s' "$line" | jq -r '.type // empty' 2> /dev/null) || continue
+        [[ -z "$line_type" ]] && continue
+
+        case "$line_type" in
+          system)
+            model=$(printf '%s' "$line" | jq -r '.model // empty' 2> /dev/null) || true
+            session_id=$(printf '%s' "$line" | jq -r '.session_id // empty' 2> /dev/null) || true
+            model="${model%%\[*}"
+            case "${model,,}" in
+              *haiku*) model="haiku" ;;
+              *sonnet*) model="sonnet" ;;
+              *opus*) model="opus" ;;
+            esac
+            ;;
+          assistant)
+            content_type=$(printf '%s' "$line" | jq -r '.message.content[0].type // empty' 2> /dev/null) || true
+            if [[ "$content_type" == "thinking" ]]; then
+              is_thinking=1
+            elif [[ "$content_type" == "text" ]]; then
+              is_thinking=0
+              text_chunk=$(printf '%s' "$line" | jq -r '.message.content[0].text // empty' 2> /dev/null) || true
+              if [[ -n "$text_chunk" ]]; then
+                answer_text+="$text_chunk"
+                text_chunks=$((text_chunks + 1))
+                answer_chars=$((answer_chars + ${#text_chunk}))
+                local nl_stripped="${text_chunk//[!$'\n']/}"
+                answer_lines=$((answer_lines + ${#nl_stripped}))
+                if [[ "$STREAM_OUTPUT" -eq 1 ]]; then
+                  write_chunk "$text_chunk"
+                fi
+              fi
+            fi
+            new_input=$(printf '%s' "$line" | jq -r '.message.usage.input_tokens // empty' 2> /dev/null) || true
+            new_output=$(printf '%s' "$line" | jq -r '.message.usage.output_tokens // empty' 2> /dev/null) || true
+            [[ -n "$new_input" ]] && input_tokens="$new_input"
+            [[ -n "$new_output" ]] && output_tokens="$new_output"
+            ;;
+          result)
+            status="done"
+            cost=$(printf '%s' "$line" | jq -r '.total_cost_usd // empty' 2> /dev/null) || true
+            duration_ms=$(printf '%s' "$line" | jq -r '.duration_ms // empty' 2> /dev/null) || true
+            new_input=$(printf '%s' "$line" | jq -r '.usage.input_tokens // empty' 2> /dev/null) || true
+            new_output=$(printf '%s' "$line" | jq -r '.usage.output_tokens // empty' 2> /dev/null) || true
+            [[ -n "$new_input" ]] && input_tokens="$new_input"
+            [[ -n "$new_output" ]] && output_tokens="$new_output"
+            ;;
+        esac
+
+        spinner_idx=$(((spinner_idx + 1) % ${#SPINNER[@]}))
+        spin_char="${SPINNER[$spinner_idx]}"
+        [[ "$status" == "done" ]] && spin_char="✓"
+
+        drain_bat
+
+        disp_in=$(format_tokens "$input_tokens")
+        disp_out=$(format_tokens "$output_tokens")
+        disp_cost=$(format_cost "$cost")
+        disp_dur=$(format_duration "$duration_ms")
+
+        update_status_bar "$spin_char" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
+      done < <(generate_mock_stream "$size" 0.03)
+
+      # Close bat and drain
+      if [[ -n "$demo_bat_out_fd" ]]; then
+        exec 3>&-
+        drain_bat_final
+        exec {demo_bat_out_fd}<&-
+        BAT_OUT_FD=""
+        wait "$demo_bat_pid" 2> /dev/null || true
+        [[ -n "$demo_bat_fifo" ]] && rm -f "$demo_bat_fifo"
+      fi
+
+      # Batch mode: render complete answer
+      if [[ "$STREAM_OUTPUT" -eq 0 && -n "$answer_text" ]]; then
+        printf '\e[J'
+        STATUS_BAR_VISIBLE=0
+        if [[ "$USE_PAGER" -eq 1 ]]; then
+          printf '%s' "$answer_text" | $PAGER_CMD
+        else
+          printf '%s' "$answer_text"
+        fi
+        printf '\n'
+      fi
+
+      finalize_status_bar "✓" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
+
+      # Restore stream setting
+      STREAM_OUTPUT="$save_stream"
+
+      printf '\n'
+    done
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Session naming helpers
+# ---------------------------------------------------------------------------
+slugify_question() {
+  local q="$1" max="${2:-50}"
+  printf '%s' "$q" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' \
+    | cut -c1-"$max"
+}
+
+unique_session_name() {
+  local base="$1" dir="$2"
+  if [[ ! -f "${dir}/${base}.json" ]]; then
+    printf '%s' "$base"
+    return
+  fi
+  local n=2
+  while [[ -f "${dir}/${base}-${n}.json" ]]; do
+    ((n++))
+  done
+  printf '%s' "${base}-${n}"
+}
+
+# ---------------------------------------------------------------------------
+# History & session viewing helpers
+# ---------------------------------------------------------------------------
+format_time_ago() {
+  local ts="$1"
+  local then_epoch now_epoch diff
+  then_epoch=$(date -d "$ts" +%s 2> /dev/null) || return
+  now_epoch=$(date +%s)
+  diff=$((now_epoch - then_epoch))
+
+  if [[ $diff -lt 60 ]]; then
+    printf '%d sec ago' "$diff"
+  elif [[ $diff -lt 3600 ]]; then
+    printf '%d min ago' "$((diff / 60))"
+  elif [[ $diff -lt 86400 ]]; then
+    local hrs tenths
+    hrs=$((diff / 3600))
+    tenths=$(((diff % 3600) * 10 / 3600))
+    if [[ $tenths -gt 0 ]]; then
+      printf '%d.%d hrs ago' "$hrs" "$tenths"
+    else
+      printf '%d hrs ago' "$hrs"
+    fi
+  elif [[ $diff -lt 604800 ]]; then
+    printf '%dd ago' "$((diff / 86400))"
+  else
+    printf '%dw ago' "$((diff / 604800))"
+  fi
+}
+
+show_history() {
+  local session_dir="${1:-$SESSION_DIR}"
+  local files=()
+
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && files+=("$f")
+  done < <(ls -t "$session_dir"/*.json 2> /dev/null)
+
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo "No saved sessions." >&2
+    return 1
+  fi
+
+  local idx=1
+  for f in "${files[@]}"; do
+    local name ts question_text answer_lines time_ago disp_name disp_q
+    name=$(basename "$f" .json)
+    ts=$(jq -r '.timestamp // empty' "$f" 2> /dev/null) || true
+    question_text=$(jq -r '.question // empty' "$f" 2> /dev/null) || true
+    answer_lines=$(jq -r '.answer // "" | split("\n") | length' "$f" 2> /dev/null) || true
+
+    # Truncate name with ellipsis
+    disp_name="$name"
+    if [[ ${#disp_name} -gt $MAX_DISPLAY_NAME ]]; then
+      disp_name="${disp_name:0:$((MAX_DISPLAY_NAME))}…"
+    fi
+
+    # Truncate question
+    disp_q="$question_text"
+    if [[ ${#disp_q} -gt 40 ]]; then
+      disp_q="${disp_q:0:39}…"
+    fi
+
+    time_ago=""
+    [[ -n "$ts" ]] && time_ago=$(format_time_ago "$ts")
+
+    printf '%d | %-13s | %-*s | %-40s | %sL\n' \
+      "$idx" "$time_ago" "$((MAX_DISPLAY_NAME + 1))" "$disp_name" "$disp_q" "$answer_lines"
+
+    ((idx++))
+  done
+}
+
+view_session() {
+  local arg="$1"
+  local session_dir="${SESSION_DIR}"
+
+  if [[ -z "$arg" || "$arg" == "__SHOW_HISTORY__" ]]; then
+    show_history
+    return
+  fi
+
+  local session_file=""
+
+  # Check if arg is a numeric index
+  if [[ "$arg" =~ ^[0-9]+$ ]]; then
+    local files=()
+    while IFS= read -r f; do
+      [[ -n "$f" ]] && files+=("$f")
+    done < <(ls -t "$session_dir"/*.json 2> /dev/null)
+
+    local idx=$((arg))
+    if [[ $idx -ge 1 && $idx -le ${#files[@]} ]]; then
+      session_file="${files[$((idx - 1))]}"
+    fi
+  fi
+
+  # If not found by index, try as name/id
+  if [[ -z "$session_file" ]]; then
+    if [[ -f "${session_dir}/${arg}.json" ]]; then
+      session_file="${session_dir}/${arg}.json"
+    else
+      # Try prefix match
+      local matches=()
+      while IFS= read -r f; do
+        [[ -n "$f" ]] && matches+=("$f")
+      done < <(ls "${session_dir}/${arg}"*.json 2> /dev/null)
+      if [[ ${#matches[@]} -eq 1 ]]; then
+        session_file="${matches[0]}"
+      elif [[ ${#matches[@]} -gt 1 ]]; then
+        echo "Ambiguous session name '${arg}'. Matches:" >&2
+        for m in "${matches[@]}"; do
+          echo "  $(basename "$m" .json)" >&2
+        done
+        return 1
+      fi
+    fi
+  fi
+
+  if [[ -z "$session_file" || ! -f "$session_file" ]]; then
+    echo "Session not found: ${arg}" >&2
+    echo "" >&2
+    show_history
+    return 1
+  fi
+
+  debug_log "viewing session: $session_file"
+
+  # Extract session data
+  local s_model s_cost s_dur s_input s_output s_answer
+  s_model=$(jq -r '.model // "unknown"' "$session_file")
+  s_cost=$(jq -r '.cost_usd // empty' "$session_file")
+  s_dur=$(jq -r '.duration_ms // empty' "$session_file")
+  s_input=$(jq -r '.usage.input_tokens // empty' "$session_file")
+  s_output=$(jq -r '.usage.output_tokens // empty' "$session_file")
+  s_answer=$(jq -r '.answer // ""' "$session_file")
+
+  # Clean up model name
+  s_model="${s_model%%\[*}"
+  case "${s_model,,}" in
+    *haiku*) s_model="haiku" ;;
+    *sonnet*) s_model="sonnet" ;;
+    *opus*) s_model="opus" ;;
+  esac
+
+  # Format display values
+  local disp_in disp_out disp_cost disp_dur
+  disp_in=$(format_tokens "$s_input")
+  disp_out=$(format_tokens "$s_output")
+  disp_cost=$(format_cost "$s_cost")
+  disp_dur=$(format_duration "$s_dur")
+
+  # Render status bar inline (not pinned to terminal row 1)
+  render_status_bar "✓" "$s_model" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "done"
+  printf '\n\n'
+
+  # Pipe answer through pager
+  if [[ "$USE_PAGER" -eq 1 ]]; then
+    printf '%s' "$s_answer" | $PAGER_CMD
+  else
+    printf '%s' "$s_answer"
+  fi
+  printf '\n'
+}
+
+if [[ "$SHOW_HISTORY" -eq 1 ]]; then
+  mkdir -p "$SESSION_DIR"
+  show_history
+  exit 0
+fi
+
+if [[ -n "$VIEW_SESSION" ]]; then
+  mkdir -p "$SESSION_DIR"
+  view_session "$VIEW_SESSION"
+  exit 0
+fi
+
+# Allow sourcing for tests: if _CLAUDE_ASK_SOURCED is set, stop here
+if [[ -n "${_CLAUDE_ASK_SOURCED:-}" ]]; then
+  return 0 2> /dev/null || exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Cursor tracking & status bar rendering (below content)
+# ---------------------------------------------------------------------------
+CURSOR_COL=1 # 1-indexed terminal column position
+STATUS_BAR_VISIBLE=0
+
+# Stream metrics
+STREAM_START=0
+answer_lines=0
+answer_chars=0
+text_chunks=0
+is_thinking=0
+
+emit_text() {
+  local text="$1"
+  [[ -z "$text" ]] && return
+  printf '%s' "$text"
+  # Track column position after last newline
+  if [[ "$text" == *$'\n'* ]]; then
+    local after="${text##*$'\n'}"
+    CURSOR_COL=$((${#after} + 1))
+  else
+    CURSOR_COL=$((CURSOR_COL + ${#text}))
+  fi
+}
+
+update_status_bar() {
+  local content info_content elapsed
+  content="$(render_status_bar "$@")"
+  elapsed=$((SECONDS - STREAM_START))
+  info_content="$(render_stream_info "$answer_lines" "$answer_chars" "$text_chunks" "$elapsed" "$status" "$is_thinking")"
+  # Clear from cursor to end of screen (removes old status bar + info)
+  printf '\e[J'
+  # Move down 2 lines, print status bar, then info line below
+  printf '\n\n\e[2K%s\n\e[2K%s' "$content" "$info_content"
+  # Move back up 3 lines (blank + status + info) and restore column
+  printf '\e[3A\e[%dG' "$CURSOR_COL"
+  STATUS_BAR_VISIBLE=1
+}
+
+finalize_status_bar() {
+  local content info_content
+  content="$(render_status_bar "$@")"
+  info_content="$(render_stream_info "$answer_lines" "$answer_chars" "$text_chunks" "" "done" "$is_thinking")"
+  # Clear from cursor to end of screen
+  printf '\e[J'
+  # Print final status bar + info line 2 lines below content
+  printf '\n\n%s\n%s\n' "$content" "$info_content"
+  STATUS_BAR_VISIBLE=0
+}
+
+# ---------------------------------------------------------------------------
+# Cleanup on exit
+# ---------------------------------------------------------------------------
+BAT_PID=""
+BAT_FIFO=""
+BAT_OUT_FD=""
+
+cleanup() {
+  debug_log "cleanup called"
+  # Clear any lingering status bar below content
+  if [[ "${STATUS_BAR_VISIBLE:-0}" -eq 1 ]]; then
+    printf '\e[J'
+  fi
+  printf '\e[?25h' # ensure cursor visible
+  [[ -n "$BAT_PID" ]] && kill "$BAT_PID" 2> /dev/null || true
+  [[ -n "$BAT_OUT_FD" ]] && exec {BAT_OUT_FD}<&- 2> /dev/null || true
+  [[ -n "$BAT_FIFO" ]] && rm -f "$BAT_FIFO" 2> /dev/null || true
+  [[ -n "${RAW_JSON_TMP:-}" ]] && rm -f "$RAW_JSON_TMP" 2> /dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# ---------------------------------------------------------------------------
+# Session save directory
+# ---------------------------------------------------------------------------
+mkdir -p "$SESSION_DIR"
+
+# ---------------------------------------------------------------------------
+# Set up bat pipe for markdown rendering (output intercepted for sync)
+# ---------------------------------------------------------------------------
+if [[ "$USE_PAGER" -eq 1 && "$STREAM_OUTPUT" -eq 1 ]]; then
+  BAT_FIFO=$(mktemp -u /tmp/claude-ask-bat.XXXXXX)
+  mkfifo "$BAT_FIFO"
+  # Start bat reading from FIFO; capture its output via process substitution
+  # so we can drain it synchronously and avoid races with status bar updates
+  exec {BAT_OUT_FD}< <($PAGER_CMD < "$BAT_FIFO" 2> /dev/null)
+  BAT_PID=$!
+  exec 3> "$BAT_FIFO"
+  debug_log "bat pipeline: fifo=$BAT_FIFO pid=$BAT_PID out_fd=$BAT_OUT_FD"
+fi
+
+# Write a text chunk: through bat if available, otherwise direct to terminal
+write_chunk() {
+  local chunk="$1"
+  if [[ -n "$BAT_OUT_FD" ]]; then
+    printf '%s' "$chunk" >&3
+  else
+    emit_text "$chunk"
+  fi
+}
+
+# Drain available bat output into terminal (non-blocking)
+drain_bat() {
+  [[ -z "$BAT_OUT_FD" ]] && return
+  local bat_line
+  while read -t 0 <&${BAT_OUT_FD} 2> /dev/null; do
+    IFS= read -r bat_line <&${BAT_OUT_FD} || break
+    emit_text "${bat_line}"$'\n'
+  done
+}
+
+# Drain all remaining bat output (blocking until EOF)
+drain_bat_final() {
+  [[ -z "$BAT_OUT_FD" ]] && return
+  local bat_line
+  while IFS= read -r bat_line <&${BAT_OUT_FD}; do
+    emit_text "${bat_line}"$'\n'
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Demo output mode: run mock streams through the real rendering pipeline
+# ---------------------------------------------------------------------------
+if [[ "$DEMO_OUTPUT" -eq 1 ]]; then
+  run_demo_output
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# State variables for parsing the JSON stream
+# ---------------------------------------------------------------------------
+model=""
+session_id=""
+spinner_idx=0
+input_tokens=""
+output_tokens=""
+cache_creation_tokens=""
+cache_read_tokens=""
+cost=""
+duration_ms=""
+answer_text=""
+status="running"
+
+# Temp file for accumulating raw JSON lines (avoids subshell variable loss)
+RAW_JSON_TMP=$(mktemp /tmp/claude-ask-raw.XXXXXX)
+
+# ---------------------------------------------------------------------------
+# Draw initial status bar
+# ---------------------------------------------------------------------------
+STREAM_START=$SECONDS
+spin_char="${SPINNER[$spinner_idx]}"
+update_status_bar "$spin_char" "connecting..." "" "" "" "" "running"
+
+# ---------------------------------------------------------------------------
+# Main loop: stream JSON from claude CLI and parse line by line
+# Using process substitution so variables persist in the current shell
+# ---------------------------------------------------------------------------
+debug_log "starting main loop, streaming from claude"
+while IFS= read -r line; do
+  # Save raw line to temp file for session saving
+  printf '%s\n' "$line" >> "$RAW_JSON_TMP"
+
+  # Skip empty lines
+  [[ -z "$line" ]] && continue
+
+  # Parse the JSON line with jq
+  line_type=$(printf '%s' "$line" | jq -r '.type // empty' 2> /dev/null) || continue
+  [[ -z "$line_type" ]] && continue
+
+  case "$line_type" in
+    system)
+      # Extract model and session_id from init message
+      model=$(printf '%s' "$line" | jq -r '.model // empty' 2> /dev/null) || true
+      session_id=$(printf '%s' "$line" | jq -r '.session_id // empty' 2> /dev/null) || true
+      # Clean up model name: strip context window suffix like [1m]
+      model="${model%%\[*}"
+      # Shorten model name
+      case "${model,,}" in
+        *haiku*) model="haiku" ;;
+        *sonnet*) model="sonnet" ;;
+        *opus*) model="opus" ;;
+      esac
+      debug_log "system msg: model=$model session_id=$session_id"
+      ;;
+
+    assistant)
+      content_type=$(printf '%s' "$line" | jq -r '.message.content[0].type // empty' 2> /dev/null) || true
+
+      if [[ "$content_type" == "thinking" ]]; then
+        is_thinking=1
+      elif [[ "$content_type" == "text" ]]; then
+        is_thinking=0
+        # Extract the text chunk
+        text_chunk=$(printf '%s' "$line" | jq -r '.message.content[0].text // empty' 2> /dev/null) || true
+        if [[ -n "$text_chunk" ]]; then
+          answer_text+="$text_chunk"
+          # Update stream metrics
+          text_chunks=$((text_chunks + 1))
+          answer_chars=$((answer_chars + ${#text_chunk}))
+          # Count newlines in chunk
+          nl_stripped="${text_chunk//[!$'\n']/}"
+          answer_lines=$((answer_lines + ${#nl_stripped}))
+          # Stream to terminal if enabled
+          if [[ "$STREAM_OUTPUT" -eq 1 ]]; then
+            write_chunk "$text_chunk"
+          fi
+        fi
+      fi
+
+      # Update token counts if present (usage is nested under .message for assistant events)
+      new_input=$(printf '%s' "$line" | jq -r '.message.usage.input_tokens // empty' 2> /dev/null) || true
+      new_output=$(printf '%s' "$line" | jq -r '.message.usage.output_tokens // empty' 2> /dev/null) || true
+      new_cache_creation=$(printf '%s' "$line" | jq -r '.message.usage.cache_creation_input_tokens // empty' 2> /dev/null) || true
+      new_cache_read=$(printf '%s' "$line" | jq -r '.message.usage.cache_read_input_tokens // empty' 2> /dev/null) || true
+
+      [[ -n "$new_input" ]] && input_tokens="$new_input"
+      [[ -n "$new_output" ]] && output_tokens="$new_output"
+      [[ -n "$new_cache_creation" ]] && cache_creation_tokens="$new_cache_creation"
+      [[ -n "$new_cache_read" ]] && cache_read_tokens="$new_cache_read"
+      ;;
+
+    result)
+      status="done"
+      cost=$(printf '%s' "$line" | jq -r '.total_cost_usd // empty' 2> /dev/null) || true
+      duration_ms=$(printf '%s' "$line" | jq -r '.duration_ms // empty' 2> /dev/null) || true
+
+      # Final token counts from result (usage is top-level for result events)
+      new_input=$(printf '%s' "$line" | jq -r '.usage.input_tokens // empty' 2> /dev/null) || true
+      new_output=$(printf '%s' "$line" | jq -r '.usage.output_tokens // empty' 2> /dev/null) || true
+      [[ -n "$new_input" ]] && input_tokens="$new_input"
+      [[ -n "$new_output" ]] && output_tokens="$new_output"
+      debug_log "result msg: cost=$cost duration_ms=$duration_ms in=$input_tokens out=$output_tokens"
+      ;;
+
+    rate_limit_event)
+      continue
+      ;;
+  esac
+
+  # Advance spinner
+  spinner_idx=$(((spinner_idx + 1) % ${#SPINNER[@]}))
+  spin_char="${SPINNER[$spinner_idx]}"
+  [[ "$status" == "done" ]] && spin_char="✓"
+
+  # Drain any rendered output from bat before updating status bar
+  drain_bat
+
+  # Format display values
+  disp_in=$(format_tokens "$input_tokens")
+  disp_out=$(format_tokens "$output_tokens")
+  disp_cost=$(format_cost "$cost")
+  disp_dur=$(format_duration "$duration_ms")
+
+  update_status_bar "$spin_char" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
+
+done < <(claude --output-format stream-json --verbose -p "$question" 2> /dev/null)
+
+# Close bat input and drain remaining rendered output
+if [[ -n "$BAT_OUT_FD" ]]; then
+  exec 3>&-
+  drain_bat_final
+  exec {BAT_OUT_FD}<&-
+  BAT_OUT_FD=""
+  wait "$BAT_PID" 2> /dev/null || true
+  BAT_PID=""
+fi
+
+# In batch mode, render the complete answer now
+if [[ "$STREAM_OUTPUT" -eq 0 && -n "$answer_text" ]]; then
+  # Clear the status bar area (was showing progress only)
+  printf '\e[J'
+  STATUS_BAR_VISIBLE=0
+  if [[ "$USE_PAGER" -eq 1 ]]; then
+    printf '%s' "$answer_text" | $PAGER_CMD
+  else
+    printf '%s' "$answer_text"
+  fi
+  printf '\n'
+fi
+
+# Render final status bar below content (stays permanently)
+disp_in=$(format_tokens "$input_tokens")
+disp_out=$(format_tokens "$output_tokens")
+disp_cost=$(format_cost "$cost")
+disp_dur=$(format_duration "$duration_ms")
+finalize_status_bar "✓" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
+
+# ---------------------------------------------------------------------------
+# Save session
+# ---------------------------------------------------------------------------
+if [[ -n "$session_id" && -s "$RAW_JSON_TMP" ]]; then
+  session_slug=$(slugify_question "$question")
+  session_name=$(unique_session_name "$session_slug" "$SESSION_DIR")
+  session_file="${SESSION_DIR}/${session_name}.json"
+  debug_log "saving session: slug=$session_slug name=$session_name file=$session_file"
+
+  if [[ "$SAVE_RAW" -eq 1 ]]; then
+    cp "$RAW_JSON_TMP" "$session_file"
+  else
+    jq -s '
+      {
+        session_id: (map(select(.type == "system")) | first | .session_id // null),
+        model: (map(select(.type == "system")) | first | .model // null),
+        name: null,
+        question: null,
+        answer: (map(select(.type == "result")) | last | .result // null),
+        thinking: (map(select(.type == "assistant" and .message.content[0].type == "thinking")) | map(.message.content[0].thinking) | if length > 0 then join("\n") else null end),
+        cost_usd: (map(select(.type == "result")) | last | .total_cost_usd // null),
+        duration_ms: (map(select(.type == "result")) | last | .duration_ms // null),
+        duration_api_ms: (map(select(.type == "result")) | last | .duration_api_ms // null),
+        usage: {
+          input_tokens: (map(select(.type == "result")) | last | .usage.input_tokens // null),
+          output_tokens: (map(select(.type == "result")) | last | .usage.output_tokens // null),
+          cache_creation_input_tokens: (map(select(.type == "result")) | last | .usage.cache_creation_input_tokens // null),
+          cache_read_input_tokens: (map(select(.type == "result")) | last | .usage.cache_read_input_tokens // null)
+        },
+        timestamp: now | todate
+      }
+    ' "$RAW_JSON_TMP" \
+      | jq --arg q "$question" --arg n "$session_name" '.question = $q | .name = $n' \
+        > "$session_file"
+  fi
+fi
