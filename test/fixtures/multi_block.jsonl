@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","cwd":"/tmp","session_id":"multi-block-001","model":"claude-opus-4-6[1m]"}
+{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Weighing the options."},{"type":"text","text":"First part. "},{"type":"text","text":"Second\tpart\nwith a newline."}],"usage":{"input_tokens":40,"output_tokens":12}},"session_id":"multi-block-001"}
+{"type":"rate_limit_event","session_id":"multi-block-001"}
+not json at all
+{"type":"result","subtype":"success","is_error":false,"duration_ms":900,"duration_api_ms":850,"num_turns":1,"result":"First part. Second\tpart\nwith a newline.","total_cost_usd":0.002,"usage":{"input_tokens":40,"output_tokens":12}}

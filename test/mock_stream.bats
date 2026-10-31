@@ -4,15 +4,10 @@
 load test_helper
 
 setup() {
-  export TEST_TEMP_DIR="$(mktemp -d)"
+  common_setup
   source_claude_ask
 }
 
-teardown() {
-  if [[ -n "${TEST_TEMP_DIR:-}" && -d "$TEST_TEMP_DIR" ]]; then
-    rm -rf "$TEST_TEMP_DIR"
-  fi
-}
 
 # ---------------------------------------------------------------------------
 # generate_mock_stream: structure
@@ -94,55 +89,15 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Parsing mock stream through the fixture parser
+# Parsing mock streams through process_stream_line
 # ---------------------------------------------------------------------------
 @test "mock stream: small parses to correct model" {
-  # Write mock stream to a temp fixture
   local fixture="$TEST_TEMP_DIR/mock_small.jsonl"
   generate_mock_stream small 0 > "$fixture"
-
-  source_claude_ask
-  model=""
-  session_id=""
-  input_tokens=""
-  output_tokens=""
-  cost=""
-  duration_ms=""
-  answer_text=""
-  status="running"
-
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    line_type=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
-    [[ -z "$line_type" ]] && continue
-    case "$line_type" in
-      system)
-        model=$(printf '%s' "$line" | jq -r '.model // empty' 2>/dev/null) || true
-        model="${model%%\[*}"
-        case "${model,,}" in
-          *opus*) model="opus" ;;
-        esac
-        ;;
-      assistant)
-        content_type=$(printf '%s' "$line" | jq -r '.message.content[0].type // empty' 2>/dev/null) || true
-        if [[ "$content_type" == "text" ]]; then
-          text_chunk=$(printf '%s' "$line" | jq -r '.message.content[0].text // empty' 2>/dev/null) || true
-          [[ -n "$text_chunk" ]] && answer_text+="$text_chunk"
-        fi
-        new_in=$(printf '%s' "$line" | jq -r '.message.usage.input_tokens // empty' 2>/dev/null) || true
-        new_out=$(printf '%s' "$line" | jq -r '.message.usage.output_tokens // empty' 2>/dev/null) || true
-        [[ -n "$new_in" ]] && input_tokens="$new_in"
-        [[ -n "$new_out" ]] && output_tokens="$new_out"
-        ;;
-      result)
-        status="done"
-        cost=$(printf '%s' "$line" | jq -r '.total_cost_usd // empty' 2>/dev/null) || true
-        duration_ms=$(printf '%s' "$line" | jq -r '.duration_ms // empty' 2>/dev/null) || true
-        ;;
-    esac
-  done < "$fixture"
+  feed_stream "$fixture"
 
   [ "$model" = "opus" ]
+  [ "$session_id" = "demo-small" ]
   [ "$status" = "done" ]
   [[ "$answer_text" == *"Paris"* ]]
   [[ -n "$cost" ]]
@@ -152,51 +107,19 @@ teardown() {
 @test "mock stream: medium answer contains markdown headings" {
   local fixture="$TEST_TEMP_DIR/mock_medium.jsonl"
   generate_mock_stream medium 0 > "$fixture"
-
-  source_claude_ask
-  answer_text=""
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    line_type=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
-    case "$line_type" in
-      assistant)
-        content_type=$(printf '%s' "$line" | jq -r '.message.content[0].type // empty' 2>/dev/null) || true
-        if [[ "$content_type" == "text" ]]; then
-          text_chunk=$(printf '%s' "$line" | jq -r '.message.content[0].text // empty' 2>/dev/null) || true
-          [[ -n "$text_chunk" ]] && answer_text+="$text_chunk"
-        fi
-        ;;
-    esac
-  done < "$fixture"
+  feed_stream "$fixture"
 
   [[ "$answer_text" == *"## "* ]]
   [[ "$answer_text" == *"### "* ]]
   [[ "$answer_text" == *'```'* ]]
 }
 
-@test "mock stream: large answer contains table and code blocks" {
+@test "mock stream: large answer reassembles to the original text" {
   local fixture="$TEST_TEMP_DIR/mock_large.jsonl"
   generate_mock_stream large 0 > "$fixture"
+  feed_stream "$fixture"
 
-  source_claude_ask
-  answer_text=""
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    line_type=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
-    case "$line_type" in
-      assistant)
-        content_type=$(printf '%s' "$line" | jq -r '.message.content[0].type // empty' 2>/dev/null) || true
-        if [[ "$content_type" == "text" ]]; then
-          text_chunk=$(printf '%s' "$line" | jq -r '.message.content[0].text // empty' 2>/dev/null) || true
-          [[ -n "$text_chunk" ]] && answer_text+="$text_chunk"
-        fi
-        ;;
-    esac
-  done < "$fixture"
-
-  [[ "$answer_text" == *"| Season"* ]]
-  [[ "$answer_text" == *'```bash'* ]]
-  [[ "$answer_text" == *"metro_lines"* ]]
+  [ "$answer_text" = "$MOCK_LARGE_TEXT" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -205,38 +128,11 @@ teardown() {
 @test "mock stream: metrics track lines correctly for medium" {
   local fixture="$TEST_TEMP_DIR/mock_medium.jsonl"
   generate_mock_stream medium 0 > "$fixture"
+  feed_stream "$fixture"
 
-  source_claude_ask
-  answer_text=""
-  answer_lines=0
-  answer_chars=0
-  text_chunks=0
-
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    line_type=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
-    case "$line_type" in
-      assistant)
-        content_type=$(printf '%s' "$line" | jq -r '.message.content[0].type // empty' 2>/dev/null) || true
-        if [[ "$content_type" == "text" ]]; then
-          text_chunk=$(printf '%s' "$line" | jq -r '.message.content[0].text // empty' 2>/dev/null) || true
-          if [[ -n "$text_chunk" ]]; then
-            answer_text+="$text_chunk"
-            text_chunks=$(( text_chunks + 1 ))
-            answer_chars=$(( answer_chars + ${#text_chunk} ))
-            local nl_stripped="${text_chunk//[!$'\n']/}"
-            answer_lines=$(( answer_lines + ${#nl_stripped} ))
-          fi
-        fi
-        ;;
-    esac
-  done < "$fixture"
-
-  # Medium text has multiple lines
-  [[ "$answer_lines" -gt 5 ]]
-  # Chars should match accumulated text length
-  [[ "$answer_chars" -eq "${#answer_text}" ]]
-  # Should have multiple chunks
+  local newlines="${MOCK_MEDIUM_TEXT//[!$'\n']/}"
+  [ "$answer_lines" -eq "${#newlines}" ]
+  [ "$answer_chars" -eq "${#answer_text}" ]
   [[ "$text_chunks" -gt 1 ]]
 }
 

@@ -4,6 +4,7 @@
 load test_helper
 
 setup() {
+  common_setup
   source_claude_ask
 }
 
@@ -137,6 +138,24 @@ setup() {
 # ---------------------------------------------------------------------------
 # render_status_bar dispatch
 # ---------------------------------------------------------------------------
+@test "powerline: separator after a missing tokens segment uses the claude color" {
+  THEME="powerline"
+  out=$(render_status_bar "x" "opus" "" "" '$0.01' "" "running")
+  [[ "$out" == *"${BG_COST}${FG_CLAUDE}${SEP_POWERLINE}"* ]]
+}
+
+@test "powerline: separator after a missing cost segment uses the tokens color" {
+  THEME="powerline"
+  out=$(render_status_bar "x" "opus" "1k" "50" "" "2.0s" "running")
+  [[ "$out" == *"${BG_DURATION}${FG_TOKENS}${SEP_POWERLINE}"* ]]
+}
+
+@test "powerline: done cap follows the last present segment" {
+  THEME="powerline"
+  out=$(render_status_bar "x" "opus" "1k" "50" '$0.01' "" "done")
+  [[ "$out" == *"${BG_COST}${FG_COST}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}done"* ]]
+}
+
 @test "render_status_bar dispatches to correct theme" {
   # Each theme produces different output for the same input
   THEME="minimal"

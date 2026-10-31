@@ -4,10 +4,8 @@
 load test_helper
 
 setup() {
+  common_setup
   source_claude_ask
-  export TEST_TEMP_DIR="$(mktemp -d)"
-  export SESSION_DIR="$TEST_TEMP_DIR/sessions"
-  mkdir -p "$SESSION_DIR"
 }
 
 # ---------------------------------------------------------------------------
@@ -65,30 +63,42 @@ setup() {
 # ---------------------------------------------------------------------------
 @test "format_time_ago: seconds" {
   local ts
-  ts=$(date -u -d '30 seconds ago' '+%Y-%m-%dT%H:%M:%SZ')
+  ts=$(jq -rn '(now - 30) | floor | todate')
   result=$(format_time_ago "$ts")
   [[ "$result" == *"sec ago"* ]]
 }
 
 @test "format_time_ago: minutes" {
   local ts
-  ts=$(date -u -d '15 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')
+  ts=$(jq -rn '(now - 900) | floor | todate')
   result=$(format_time_ago "$ts")
   [[ "$result" == *"min ago"* ]]
 }
 
 @test "format_time_ago: hours" {
   local ts
-  ts=$(date -u -d '3 hours ago' '+%Y-%m-%dT%H:%M:%SZ')
+  ts=$(jq -rn '(now - 10800) | floor | todate')
   result=$(format_time_ago "$ts")
   [[ "$result" == *"hrs ago"* ]]
 }
 
 @test "format_time_ago: days" {
   local ts
-  ts=$(date -u -d '5 days ago' '+%Y-%m-%dT%H:%M:%SZ')
+  ts=$(jq -rn '(now - 432000) | floor | todate')
   result=$(format_time_ago "$ts")
   [[ "$result" == *"d ago"* ]]
+}
+
+@test "format_time_ago: weeks" {
+  local ts
+  ts=$(jq -rn '(now - 1814400) | floor | todate')
+  result=$(format_time_ago "$ts")
+  [ "$result" = "3w ago" ]
+}
+
+@test "format_time_ago: prints nothing for an unparsable timestamp" {
+  result=$(format_time_ago "yesterday")
+  [ -z "$result" ]
 }
 
 # ---------------------------------------------------------------------------

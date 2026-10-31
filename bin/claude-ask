@@ -6,15 +6,17 @@
 #
 # Options:
 #   --theme THEME      Status bar theme: minimal, bubbles, powerline (default: minimal)
-#   --pager CMD        Pager command for markdown output (default: bat --color=always -l markdown --paging=never --wrap=auto)
+#   --pager CMD        Pager command for markdown output, run with bash -c (default: nvimpager)
 #   --no-pager         Disable pager, output raw text
 #   --demo-themes       Show example status bars for all themes and exit
 #   --demo-output       Simulate streaming with mock responses (small/medium/large) and exit
 #   --no-stream        Don't stream output; show status bar only, render markdown when complete
-#   --save-raw         Save raw JSON stream instead of parsed format
+#   --save-raw         Also save the raw JSON stream, as NAME.jsonl beside NAME.json
 #   --history          List saved sessions
 #   --session [ID|N]   View a saved session by name/id or index number
-#   --debug-log [FILE] Write debug messages to FILE (default: /tmp/claude-ask.log)
+#   --debug-log[=FILE] Write debug messages to FILE
+#                      (default: ${XDG_STATE_HOME:-~/.local/state}/claude-ask/debug.log)
+#   --version          Print the version and exit
 #   -h, --help         Show this help message
 #
 # Examples:
@@ -27,8 +29,22 @@
 #   claude-ask --session 1                        # view most recent session
 #   claude-ask --session git-bare                 # view session by name
 #   claude-ask --debug-log "What is 2+2?"         # enable debug logging
+#
+# Environment:
+#   SESSION_DIR        Where sessions are saved (default: ~/.local/share/claude/cli-sessions)
+#   CLAUDE_ASK_BIN     The claude command to run (default: claude)
+#   CLAUDE_ASK_DEMO_DELAY  Seconds between demo frames (default: 0.08 themes, 0.03 output)
 
 set -euo pipefail
+
+# Numbers are formatted with "." whatever the user's locale (bc prints "."
+# and printf would reject it under a comma-decimal LC_NUMERIC). LC_ALL would
+# override LC_NUMERIC, so it moves to LANG, keeping the character encoding.
+if [[ -n "${LC_ALL:-}" ]]; then
+  export LANG="$LC_ALL"
+  unset LC_ALL
+fi
+export LC_NUMERIC=C
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -44,20 +60,35 @@ DEMO_OUTPUT=0
 SHOW_HISTORY=0
 VIEW_SESSION=""
 DEBUG_LOG=""
+DEFAULT_DEBUG_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/claude-ask/debug.log"
 MAX_DISPLAY_NAME=20
 SESSION_DIR="${SESSION_DIR:-$HOME/.local/share/claude/cli-sessions}"
+CLAUDE_BIN="${CLAUDE_ASK_BIN:-claude}"
 
 # ---------------------------------------------------------------------------
 # Debug logging (must be defined before arg parsing)
 # ---------------------------------------------------------------------------
 debug_log() {
   [[ -z "${DEBUG_LOG:-}" ]] && return
-  printf '[%s] %s\n' "$(date '+%H:%M:%S.%3N')" "$*" >> "$DEBUG_LOG"
+  local now="$EPOCHREALTIME" # seconds.microseconds, no date(1) needed
+  local frac="${now#*[.,]}"
+  printf '[%(%H:%M:%S)T.%s] %s\n' "${now%[.,]*}" "${frac:0:3}" "$*" >> "$DEBUG_LOG"
 }
 
 # ---------------------------------------------------------------------------
 # CLI argument parsing
 # ---------------------------------------------------------------------------
+# Print the version from the VERSION file next to bin/ (the script is
+# usually installed as a symlink into the repo, so resolve it first)
+print_version() {
+  local root version="unknown"
+  root="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.."
+  if [[ -r "$root/VERSION" ]]; then
+    version=$(< "$root/VERSION")
+  fi
+  printf 'claude-ask %s\n' "$version"
+}
+
 usage() {
   sed -n '2,/^$/s/^# \{0,1\}//p' "$0"
   exit 0
@@ -120,13 +151,20 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --debug-log)
-      if [[ $# -ge 2 && ! "$2" =~ ^- ]]; then
-        DEBUG_LOG="$2"
-        shift 2
-      else
-        DEBUG_LOG="/tmp/claude-ask.log"
-        shift
+      DEBUG_LOG="$DEFAULT_DEBUG_LOG"
+      shift
+      ;;
+    --debug-log=*)
+      DEBUG_LOG="${1#--debug-log=}"
+      if [[ -z "$DEBUG_LOG" ]]; then
+        echo "Error: --debug-log= requires a file name" >&2
+        exit 1
       fi
+      shift
+      ;;
+    --version)
+      print_version
+      exit 0
       ;;
     -h | --help)
       usage
@@ -146,6 +184,23 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "$DEBUG_LOG" ]]; then
+  mkdir -p "$(dirname "$DEBUG_LOG")"
+fi
+
+# Fail early, with a clear message, when a required command is missing
+require_cmds() {
+  local cmd missing=()
+  for cmd in "$@"; do
+    command -v "$cmd" > /dev/null 2>&1 || missing+=("$cmd")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "claude-ask: required command not found: ${missing[*]}" >&2
+    exit 127
+  fi
+}
+require_cmds jq bc
 
 debug_log "args parsed: THEME=$THEME USE_PAGER=$USE_PAGER SAVE_RAW=$SAVE_RAW SHOW_HISTORY=$SHOW_HISTORY VIEW_SESSION=$VIEW_SESSION"
 
@@ -172,17 +227,12 @@ fi
 # Foreground: \e[38;2;R;G;Bm   Background: \e[48;2;R;G;Bm
 RST=$'\e[0m'
 BOLD=$'\e[1m'
-ITALIC=$'\e[3m'
 
 # Palette colors (catppuccin mocha)
 FG_CLAUDE=$'\e[38;2;217;119;87m' # #D97757
 BG_CLAUDE=$'\e[48;2;49;50;68m'   # #313244
 
 FG_MODEL=$'\e[38;2;116;199;236m' # #74c7ec
-BG_MODEL=$'\e[48;2;30;30;46m'    # #1e1e2e
-
-FG_CONTEXT=$'\e[38;2;250;179;135m' # #fab387
-BG_CONTEXT=$'\e[48;2;49;50;68m'    # #313244
 
 FG_COST=$'\e[38;2;166;227;161m' # #a6e3a1
 BG_COST=$'\e[48;2;69;71;90m'    # #45475a
@@ -267,6 +317,8 @@ render_bubbles() {
 render_powerline() {
   local spin="$1" model="$2" tok_in="$3" tok_out="$4" cost="$5" dur="$6" status="$7"
   local line=""
+  # Each separator arrow takes the color of the segment before it
+  local prev_fg="${FG_CLAUDE}"
 
   # Decorative start + claude segment
   line+="${FG_CLAUDE}░▒▓${BG_CLAUDE} ${FG_CLAUDE}${spin} ${FG_MODEL}${model} ${RST}"
@@ -276,31 +328,27 @@ render_powerline() {
     local tok_str=""
     [[ -n "$tok_in" ]] && tok_str+="in:${tok_in}"
     [[ -n "$tok_out" ]] && tok_str+=" out:${tok_out}"
-    line+="${BG_TOKENS}${FG_CLAUDE}${SEP_POWERLINE}${RST}${BG_TOKENS} ${FG_TOKENS}${tok_str} ${RST}"
+    line+="${BG_TOKENS}${prev_fg}${SEP_POWERLINE}${RST}${BG_TOKENS} ${FG_TOKENS}${tok_str} ${RST}"
+    prev_fg="${FG_TOKENS}"
   fi
 
   # Cost segment
   if [[ -n "$cost" ]]; then
-    local prev_bg="${BG_TOKENS}"
-    [[ -z "$tok_in" && -z "$tok_out" ]] && prev_bg="${BG_CLAUDE}"
-    line+="${BG_COST}${FG_TOKENS}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}${cost} ${RST}"
+    line+="${BG_COST}${prev_fg}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}${cost} ${RST}"
+    prev_fg="${FG_COST}"
   fi
 
   # Duration segment
   if [[ -n "$dur" ]]; then
-    line+="${BG_DURATION}${FG_COST}${SEP_POWERLINE}${RST}${BG_DURATION} ${FG_DURATION}${dur} ${RST}"
+    line+="${BG_DURATION}${prev_fg}${SEP_POWERLINE}${RST}${BG_DURATION} ${FG_DURATION}${dur} ${RST}"
+    prev_fg="${FG_DURATION}"
   fi
 
   # Status / end cap
   if [[ "$status" == "done" ]]; then
-    line+="${BG_COST}${FG_DURATION}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}done ${RST}${FG_COST}${SEP_POWERLINE}${RST}"
+    line+="${BG_COST}${prev_fg}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}done ${RST}${FG_COST}${SEP_POWERLINE}${RST}"
   else
-    # End cap from last segment
-    local end_fg="${FG_DURATION}"
-    [[ -z "$dur" ]] && end_fg="${FG_COST}"
-    [[ -z "$cost" && -z "$dur" ]] && end_fg="${FG_TOKENS}"
-    [[ -z "$tok_in" && -z "$tok_out" && -z "$cost" && -z "$dur" ]] && end_fg="${FG_CLAUDE}"
-    line+="${end_fg}${SEP_POWERLINE}${RST}"
+    line+="${prev_fg}${SEP_POWERLINE}${RST}"
   fi
 
   printf '%s' "$line"
@@ -400,15 +448,164 @@ render_stream_info() {
 }
 
 # ---------------------------------------------------------------------------
+# Stream parsing, shared by the main loop, --demo-output and the tests
+# ---------------------------------------------------------------------------
+
+# Shorten a model id such as "claude-opus-4-6[1m]" to "opus"
+short_model_name() {
+  local m="${1%%\[*}"
+  case "${m,,}" in
+    *haiku*) m="haiku" ;;
+    *sonnet*) m="sonnet" ;;
+    *opus*) m="opus" ;;
+  esac
+  printf '%s' "$m"
+}
+
+# Reset every variable process_stream_line writes
+reset_stream_state() {
+  model=""
+  session_id=""
+  spinner_idx=0
+  input_tokens=""
+  output_tokens=""
+  cost=""
+  duration_ms=""
+  answer_text=""
+  status="running" # running, done or error
+  stream_error=""
+  is_thinking=0
+  answer_lines=0
+  answer_chars=0
+  text_chunks=0
+  CHUNK=""
+}
+
+# One jq call per event. The fields come back NUL-terminated, so text may
+# hold any character: type, model, session_id, text (every text block
+# joined), has_thinking, input tokens, output tokens, cost, duration_ms,
+# is_error, result text.
+# shellcheck disable=SC2016 # $u is a jq variable
+STREAM_FIELDS_JQ='
+  (if .type == "result" then .usage else .message.usage end) as $u
+  | [ .type, .model, .session_id,
+      ([.message.content[]? | select(.type == "text") | .text] | join("")),
+      (if any(.message.content[]?; .type == "thinking") then 1 else 0 end),
+      $u.input_tokens, $u.output_tokens, .total_cost_usd, .duration_ms,
+      (if .is_error == true then 1 else 0 end),
+      (if .type == "result" then .result else null end) ]
+  | map((. // "" | tostring) + "\u0000") | add'
+STREAM_FIELD_COUNT=11
+
+# Parse one stream-json line into the state variables. CHUNK is set to the
+# answer text the line added (empty if none). Returns 1 for lines that change
+# nothing on screen: blank, not JSON, no type, or a rate_limit_event.
+process_stream_line() {
+  local line="$1" f=()
+  CHUNK=""
+  [[ -n "$line" ]] || return 1
+  mapfile -d '' -t f < <(printf '%s' "$line" | jq -j "$STREAM_FIELDS_JQ" 2> /dev/null)
+  [[ ${#f[@]} -eq $STREAM_FIELD_COUNT && -n "${f[0]}" ]] || return 1
+
+  case "${f[0]}" in
+    system)
+      if [[ -n "${f[1]}" ]]; then model=$(short_model_name "${f[1]}"); fi
+      if [[ -n "${f[2]}" ]]; then session_id="${f[2]}"; fi
+      ;;
+    assistant)
+      if [[ -n "${f[3]}" ]]; then
+        is_thinking=0
+        CHUNK="${f[3]}"
+        answer_text+="$CHUNK"
+        text_chunks=$((text_chunks + 1))
+        answer_chars=$((answer_chars + ${#CHUNK}))
+        local newlines="${CHUNK//[!$'\n']/}"
+        answer_lines=$((answer_lines + ${#newlines}))
+      elif [[ "${f[4]}" == 1 ]]; then
+        is_thinking=1
+      fi
+      ;;
+    result)
+      status="done"
+      if [[ -n "${f[7]}" ]]; then cost="${f[7]}"; fi
+      if [[ -n "${f[8]}" ]]; then duration_ms="${f[8]}"; fi
+      if [[ "${f[9]}" == 1 ]]; then
+        status="error"
+        stream_error="${f[10]:-claude reported an error}"
+      fi
+      ;;
+    rate_limit_event)
+      return 1
+      ;;
+  esac
+
+  # Token counts: under .message for assistant events, top-level for result
+  if [[ "${f[0]}" == assistant || "${f[0]}" == result ]]; then
+    if [[ -n "${f[5]}" ]]; then input_tokens="${f[5]}"; fi
+    if [[ -n "${f[6]}" ]]; then output_tokens="${f[6]}"; fi
+  fi
+  return 0
+}
+
+# Run the pager on stdin; bash -c so quotes inside PAGER_CMD are honored
+run_pager() {
+  bash -c "$PAGER_CMD"
+}
+
+# ---------------------------------------------------------------------------
+# Session saving
+# ---------------------------------------------------------------------------
+# shellcheck disable=SC2016 # jq program
+SESSION_JQ='
+  (map(select(.type == "system")) | first) as $init
+  | (map(select(.type == "result")) | last) as $res
+  | {
+      session_id: ($init.session_id // null),
+      model: ($init.model // null),
+      name: $name,
+      question: $question,
+      answer: ($res.result // null),
+      is_error: ($res.is_error // false),
+      thinking: ([.[] | select(.type == "assistant") | .message.content[]?
+                  | select(.type == "thinking") | .thinking]
+                 | if length > 0 then join("\n") else null end),
+      cost_usd: ($res.total_cost_usd // null),
+      duration_ms: ($res.duration_ms // null),
+      duration_api_ms: ($res.duration_api_ms // null),
+      usage: {
+        input_tokens: ($res.usage.input_tokens // null),
+        output_tokens: ($res.usage.output_tokens // null),
+        cache_creation_input_tokens: ($res.usage.cache_creation_input_tokens // null),
+        cache_read_input_tokens: ($res.usage.cache_read_input_tokens // null)
+      },
+      timestamp: (now | todate)
+    }'
+
+# Save a raw stream-json file as a session in SESSION_DIR, plus a copy of the
+# raw stream as NAME.jsonl with --save-raw; prints the session file's path
+save_session() {
+  local raw="$1" question="$2" name file
+  name=$(unique_session_name "$(slugify_question "$question")" "$SESSION_DIR")
+  file="${SESSION_DIR}/${name}.json"
+  debug_log "saving session: name=$name file=$file"
+  # Lines that are not JSON objects are skipped rather than failing the save
+  jq -nR --arg question "$question" --arg name "$name" \
+    "[inputs | fromjson? | objects] | ${SESSION_JQ}" "$raw" > "$file"
+  if [[ "$SAVE_RAW" -eq 1 ]]; then
+    cp "$raw" "${SESSION_DIR}/${name}.jsonl"
+  fi
+  printf '%s\n' "$file"
+}
+
+# ---------------------------------------------------------------------------
 # Theme demo mode: show all themes with sample data and exit
 # ---------------------------------------------------------------------------
 run_theme_demo() {
   local themes=("minimal" "bubbles" "powerline")
-  local sample_spin="⠹"
   local sample_model="opus"
   local sample_in="19.9k"
   local sample_out="275"
-  local sample_cost='$0.0950'
+  local sample_cost="\$0.0950"
   local sample_dur="7.4s"
 
   for theme in "${themes[@]}"; do
@@ -418,12 +615,12 @@ run_theme_demo() {
     THEME="$theme"
     printf '  streaming: '
     local idx=0
-    for i in {1..10}; do
+    for _ in {1..10}; do
       local s="${SPINNER[$idx]}"
       printf '\r  streaming: '
       render_status_bar "$s" "$sample_model" "$sample_in" "$sample_out" "" "" "running"
       idx=$(((idx + 1) % ${#SPINNER[@]}))
-      sleep 0.08
+      sleep "${CLAUDE_ASK_DEMO_DELAY:-0.08}"
     done
     printf '\n'
 
@@ -474,6 +671,7 @@ print(f"The capital is {cities['"'"'France'"'"']}")
 Paris has been the capital since the 10th century and remains the political,
 economic, and cultural center of France.'
 
+# shellcheck disable=SC2016 # markdown sample text, not an expansion
 MOCK_LARGE_TEXT='## Comprehensive Guide to France'\''s Capital
 
 ### Introduction
@@ -633,7 +831,7 @@ generate_mock_stream() {
 
 run_demo_output() {
   local sizes=("small" "medium" "large")
-  local modes=()
+  local modes=() mode size line save_stream
 
   if [[ "$STREAM_OUTPUT" -eq 1 ]]; then
     modes+=("stream")
@@ -645,8 +843,7 @@ run_demo_output() {
       printf '\n%s%s response (%s mode)%s\n' "$BOLD" "$size" "$mode" "$RST"
       printf '%s%s%s\n' "$FG_DIM" "$(printf '%.0s─' {1..50})" "$RST"
 
-      # Set mode for this run
-      local save_stream="$STREAM_OUTPUT"
+      save_stream="$STREAM_OUTPUT"
       if [[ "$mode" == "batch" ]]; then
         STREAM_OUTPUT=0
       else
@@ -654,135 +851,30 @@ run_demo_output() {
       fi
 
       # Feed mock data through the same pipeline the real CLI uses
-      # We replicate the main loop inline to avoid needing the real claude binary
-
-      # Reset state
-      model=""
-      session_id=""
-      spinner_idx=0
-      input_tokens=""
-      output_tokens=""
-      cache_creation_tokens=""
-      cache_read_tokens=""
-      cost=""
-      duration_ms=""
-      answer_text=""
-      status="running"
+      reset_stream_state
       CURSOR_COL=1
       STATUS_BAR_VISIBLE=0
-      answer_lines=0
-      answer_chars=0
-      text_chunks=0
-      is_thinking=0
       STREAM_START=$SECONDS
 
-      # Set up bat pipe if streaming with pager
-      local demo_bat_fifo="" demo_bat_out_fd="" demo_bat_pid=""
       if [[ "$USE_PAGER" -eq 1 && "$STREAM_OUTPUT" -eq 1 ]]; then
-        demo_bat_fifo=$(mktemp -u /tmp/claude-ask-demo-bat.XXXXXX)
-        mkfifo "$demo_bat_fifo"
-        exec {demo_bat_out_fd}< <($PAGER_CMD < "$demo_bat_fifo" 2> /dev/null)
-        demo_bat_pid=$!
-        exec 3> "$demo_bat_fifo"
-        BAT_OUT_FD="$demo_bat_out_fd"
-      else
-        BAT_OUT_FD=""
+        start_pager_pipe
       fi
 
-      spin_char="${SPINNER[$spinner_idx]}"
-      update_status_bar "$spin_char" "connecting..." "" "" "" "" "running"
+      update_status_bar "${SPINNER[0]}" "connecting..." "" "" "" "" "running"
 
       while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        line_type=$(printf '%s' "$line" | jq -r '.type // empty' 2> /dev/null) || continue
-        [[ -z "$line_type" ]] && continue
-
-        case "$line_type" in
-          system)
-            model=$(printf '%s' "$line" | jq -r '.model // empty' 2> /dev/null) || true
-            session_id=$(printf '%s' "$line" | jq -r '.session_id // empty' 2> /dev/null) || true
-            model="${model%%\[*}"
-            case "${model,,}" in
-              *haiku*) model="haiku" ;;
-              *sonnet*) model="sonnet" ;;
-              *opus*) model="opus" ;;
-            esac
-            ;;
-          assistant)
-            content_type=$(printf '%s' "$line" | jq -r '.message.content[0].type // empty' 2> /dev/null) || true
-            if [[ "$content_type" == "thinking" ]]; then
-              is_thinking=1
-            elif [[ "$content_type" == "text" ]]; then
-              is_thinking=0
-              text_chunk=$(printf '%s' "$line" | jq -r '.message.content[0].text // empty' 2> /dev/null) || true
-              if [[ -n "$text_chunk" ]]; then
-                answer_text+="$text_chunk"
-                text_chunks=$((text_chunks + 1))
-                answer_chars=$((answer_chars + ${#text_chunk}))
-                local nl_stripped="${text_chunk//[!$'\n']/}"
-                answer_lines=$((answer_lines + ${#nl_stripped}))
-                if [[ "$STREAM_OUTPUT" -eq 1 ]]; then
-                  write_chunk "$text_chunk"
-                fi
-              fi
-            fi
-            new_input=$(printf '%s' "$line" | jq -r '.message.usage.input_tokens // empty' 2> /dev/null) || true
-            new_output=$(printf '%s' "$line" | jq -r '.message.usage.output_tokens // empty' 2> /dev/null) || true
-            [[ -n "$new_input" ]] && input_tokens="$new_input"
-            [[ -n "$new_output" ]] && output_tokens="$new_output"
-            ;;
-          result)
-            status="done"
-            cost=$(printf '%s' "$line" | jq -r '.total_cost_usd // empty' 2> /dev/null) || true
-            duration_ms=$(printf '%s' "$line" | jq -r '.duration_ms // empty' 2> /dev/null) || true
-            new_input=$(printf '%s' "$line" | jq -r '.usage.input_tokens // empty' 2> /dev/null) || true
-            new_output=$(printf '%s' "$line" | jq -r '.usage.output_tokens // empty' 2> /dev/null) || true
-            [[ -n "$new_input" ]] && input_tokens="$new_input"
-            [[ -n "$new_output" ]] && output_tokens="$new_output"
-            ;;
-        esac
-
-        spinner_idx=$(((spinner_idx + 1) % ${#SPINNER[@]}))
-        spin_char="${SPINNER[$spinner_idx]}"
-        [[ "$status" == "done" ]] && spin_char="✓"
-
-        drain_bat
-
-        disp_in=$(format_tokens "$input_tokens")
-        disp_out=$(format_tokens "$output_tokens")
-        disp_cost=$(format_cost "$cost")
-        disp_dur=$(format_duration "$duration_ms")
-
-        update_status_bar "$spin_char" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
-      done < <(generate_mock_stream "$size" 0.03)
-
-      # Close bat and drain
-      if [[ -n "$demo_bat_out_fd" ]]; then
-        exec 3>&-
-        drain_bat_final
-        exec {demo_bat_out_fd}<&-
-        BAT_OUT_FD=""
-        wait "$demo_bat_pid" 2> /dev/null || true
-        [[ -n "$demo_bat_fifo" ]] && rm -f "$demo_bat_fifo"
-      fi
-
-      # Batch mode: render complete answer
-      if [[ "$STREAM_OUTPUT" -eq 0 && -n "$answer_text" ]]; then
-        printf '\e[J'
-        STATUS_BAR_VISIBLE=0
-        if [[ "$USE_PAGER" -eq 1 ]]; then
-          printf '%s' "$answer_text" | $PAGER_CMD
-        else
-          printf '%s' "$answer_text"
+        process_stream_line "$line" || continue
+        if [[ -n "$CHUNK" && "$STREAM_OUTPUT" -eq 1 ]]; then
+          write_chunk "$CHUNK"
         fi
-        printf '\n'
-      fi
+        refresh_status_bar
+      done < <(generate_mock_stream "$size" "${CLAUDE_ASK_DEMO_DELAY:-0.03}")
 
-      finalize_status_bar "✓" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
+      stop_pager_pipe
+      print_batch_answer
+      show_final_status_bar
 
-      # Restore stream setting
       STREAM_OUTPUT="$save_stream"
-
       printf '\n'
     done
   done
@@ -818,8 +910,9 @@ unique_session_name() {
 format_time_ago() {
   local ts="$1"
   local then_epoch now_epoch diff
-  then_epoch=$(date -d "$ts" +%s 2> /dev/null) || return
-  now_epoch=$(date +%s)
+  # jq parses the ISO 8601 timestamp the same way on GNU and BSD systems
+  then_epoch=$(jq -rn --arg ts "$ts" '$ts | fromdateiso8601' 2> /dev/null) || return 0
+  printf -v now_epoch '%(%s)T' -1
   diff=$((now_epoch - then_epoch))
 
   if [[ $diff -lt 60 ]]; then
@@ -843,7 +936,7 @@ format_time_ago() {
 }
 
 show_history() {
-  local session_dir="${1:-$SESSION_DIR}"
+  local session_dir="$1"
   local files=()
 
   while IFS= read -r f; do
@@ -890,7 +983,7 @@ view_session() {
   local session_dir="${SESSION_DIR}"
 
   if [[ -z "$arg" || "$arg" == "__SHOW_HISTORY__" ]]; then
-    show_history
+    show_history "$session_dir"
     return
   fi
 
@@ -934,7 +1027,7 @@ view_session() {
   if [[ -z "$session_file" || ! -f "$session_file" ]]; then
     echo "Session not found: ${arg}" >&2
     echo "" >&2
-    show_history
+    show_history "$session_dir"
     return 1
   fi
 
@@ -949,13 +1042,7 @@ view_session() {
   s_output=$(jq -r '.usage.output_tokens // empty' "$session_file")
   s_answer=$(jq -r '.answer // ""' "$session_file")
 
-  # Clean up model name
-  s_model="${s_model%%\[*}"
-  case "${s_model,,}" in
-    *haiku*) s_model="haiku" ;;
-    *sonnet*) s_model="sonnet" ;;
-    *opus*) s_model="opus" ;;
-  esac
+  s_model=$(short_model_name "$s_model")
 
   # Format display values
   local disp_in disp_out disp_cost disp_dur
@@ -970,7 +1057,7 @@ view_session() {
 
   # Pipe answer through pager
   if [[ "$USE_PAGER" -eq 1 ]]; then
-    printf '%s' "$s_answer" | $PAGER_CMD
+    printf '%s' "$s_answer" | run_pager
   else
     printf '%s' "$s_answer"
   fi
@@ -979,7 +1066,7 @@ view_session() {
 
 if [[ "$SHOW_HISTORY" -eq 1 ]]; then
   mkdir -p "$SESSION_DIR"
-  show_history
+  show_history "$SESSION_DIR"
   exit 0
 fi
 
@@ -991,6 +1078,7 @@ fi
 
 # Allow sourcing for tests: if _CLAUDE_ASK_SOURCED is set, stop here
 if [[ -n "${_CLAUDE_ASK_SOURCED:-}" ]]; then
+  # shellcheck disable=SC2317 # exit is reached only when executed, not sourced
   return 0 2> /dev/null || exit 0
 fi
 
@@ -999,13 +1087,7 @@ fi
 # ---------------------------------------------------------------------------
 CURSOR_COL=1 # 1-indexed terminal column position
 STATUS_BAR_VISIBLE=0
-
-# Stream metrics
 STREAM_START=0
-answer_lines=0
-answer_chars=0
-text_chunks=0
-is_thinking=0
 
 emit_text() {
   local text="$1"
@@ -1045,12 +1127,58 @@ finalize_status_bar() {
   STATUS_BAR_VISIBLE=0
 }
 
+# Advance the spinner and redraw the status bar from the stream state
+refresh_status_bar() {
+  local spin_char
+  spinner_idx=$(((spinner_idx + 1) % ${#SPINNER[@]}))
+  spin_char="${SPINNER[$spinner_idx]}"
+  if [[ "$status" == "done" ]]; then spin_char="✓"; fi
+  if [[ "$status" == "error" ]]; then spin_char="✗"; fi
+
+  # Drain any rendered output from the pager before updating the status bar
+  drain_bat
+
+  update_status_bar "$spin_char" "${model:-...}" \
+    "$(format_tokens "$input_tokens")" "$(format_tokens "$output_tokens")" \
+    "$(format_cost "$cost")" "$(format_duration "$duration_ms")" "$status"
+}
+
+# The status bar left below the answer once the stream has ended
+show_final_status_bar() {
+  local mark="✓"
+  if [[ "$status" != "done" ]]; then mark="✗"; fi
+  finalize_status_bar "$mark" "${model:-...}" \
+    "$(format_tokens "$input_tokens")" "$(format_tokens "$output_tokens")" \
+    "$(format_cost "$cost")" "$(format_duration "$duration_ms")" "$status"
+}
+
+# In batch mode (--no-stream), render the complete answer once it is in
+print_batch_answer() {
+  [[ "$STREAM_OUTPUT" -eq 0 && -n "$answer_text" ]] || return 0
+  # Clear the status bar area (was showing progress only)
+  printf '\e[J'
+  STATUS_BAR_VISIBLE=0
+  if [[ "$USE_PAGER" -eq 1 ]]; then
+    printf '%s' "$answer_text" | run_pager
+  else
+    printf '%s' "$answer_text"
+  fi
+  printf '\n'
+}
+
 # ---------------------------------------------------------------------------
-# Cleanup on exit
+# Per-run private directory (FIFO, raw stream, claude's stderr) and cleanup
 # ---------------------------------------------------------------------------
+run_dir_base="${XDG_RUNTIME_DIR:-}"
+if [[ ! -d "$run_dir_base" || ! -w "$run_dir_base" ]]; then
+  run_dir_base="${TMPDIR:-/tmp}"
+fi
+RUN_DIR=$(mktemp -d "${run_dir_base}/claude-ask.XXXXXX")
+
 BAT_PID=""
 BAT_FIFO=""
 BAT_OUT_FD=""
+CLAUDE_PID=""
 
 cleanup() {
   debug_log "cleanup called"
@@ -1059,33 +1187,40 @@ cleanup() {
     printf '\e[J'
   fi
   printf '\e[?25h' # ensure cursor visible
-  [[ -n "$BAT_PID" ]] && kill "$BAT_PID" 2> /dev/null || true
-  [[ -n "$BAT_OUT_FD" ]] && exec {BAT_OUT_FD}<&- 2> /dev/null || true
-  [[ -n "$BAT_FIFO" ]] && rm -f "$BAT_FIFO" 2> /dev/null || true
-  [[ -n "${RAW_JSON_TMP:-}" ]] && rm -f "$RAW_JSON_TMP" 2> /dev/null || true
+  if [[ -n "$BAT_PID" ]]; then kill "$BAT_PID" 2> /dev/null || true; fi
+  if [[ -n "$CLAUDE_PID" ]]; then kill "$CLAUDE_PID" 2> /dev/null || true; fi
+  if [[ -n "$BAT_OUT_FD" ]]; then exec {BAT_OUT_FD}<&- 2> /dev/null || true; fi
+  rm -rf "$RUN_DIR" 2> /dev/null || true
 }
 trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
-# Session save directory
+# Streaming pager: the pager reads chunks from a FIFO and its rendered output
+# is read back here, so it can be drained in step with status bar updates
 # ---------------------------------------------------------------------------
-mkdir -p "$SESSION_DIR"
-
-# ---------------------------------------------------------------------------
-# Set up bat pipe for markdown rendering (output intercepted for sync)
-# ---------------------------------------------------------------------------
-if [[ "$USE_PAGER" -eq 1 && "$STREAM_OUTPUT" -eq 1 ]]; then
-  BAT_FIFO=$(mktemp -u /tmp/claude-ask-bat.XXXXXX)
+start_pager_pipe() {
+  BAT_FIFO="$RUN_DIR/pager.fifo"
   mkfifo "$BAT_FIFO"
-  # Start bat reading from FIFO; capture its output via process substitution
-  # so we can drain it synchronously and avoid races with status bar updates
-  exec {BAT_OUT_FD}< <($PAGER_CMD < "$BAT_FIFO" 2> /dev/null)
+  exec {BAT_OUT_FD}< <(run_pager < "$BAT_FIFO" 2> /dev/null)
   BAT_PID=$!
   exec 3> "$BAT_FIFO"
-  debug_log "bat pipeline: fifo=$BAT_FIFO pid=$BAT_PID out_fd=$BAT_OUT_FD"
-fi
+  debug_log "pager pipeline: fifo=$BAT_FIFO pid=$BAT_PID out_fd=$BAT_OUT_FD"
+}
 
-# Write a text chunk: through bat if available, otherwise direct to terminal
+# Close the pager's input and print the rest of its output
+stop_pager_pipe() {
+  [[ -n "$BAT_OUT_FD" ]] || return 0
+  exec 3>&-
+  drain_bat_final
+  exec {BAT_OUT_FD}<&-
+  BAT_OUT_FD=""
+  wait "$BAT_PID" 2> /dev/null || true
+  BAT_PID=""
+  rm -f "$BAT_FIFO"
+  BAT_FIFO=""
+}
+
+# Write a text chunk: through the pager if running, otherwise to the terminal
 write_chunk() {
   local chunk="$1"
   if [[ -n "$BAT_OUT_FD" ]]; then
@@ -1095,21 +1230,31 @@ write_chunk() {
   fi
 }
 
-# Drain available bat output into terminal (non-blocking)
+# Drain available pager output into the terminal without blocking. Each read
+# waits at most 10ms; on a timeout read keeps the text it got, so a line the
+# pager has only partly written is printed as far as it goes instead of
+# stalling the status bar until the pager finishes it.
 drain_bat() {
   [[ -z "$BAT_OUT_FD" ]] && return
   local bat_line
-  while read -t 0 <&${BAT_OUT_FD} 2> /dev/null; do
-    IFS= read -r bat_line <&${BAT_OUT_FD} || break
-    emit_text "${bat_line}"$'\n'
+  while true; do
+    bat_line=""
+    if IFS= read -r -t 0.01 bat_line <&"${BAT_OUT_FD}"; then
+      emit_text "${bat_line}"$'\n'
+    else
+      # Timeout or EOF: print any partial line and stop
+      emit_text "$bat_line"
+      break
+    fi
   done
 }
 
-# Drain all remaining bat output (blocking until EOF)
+# Drain all remaining pager output (blocking until EOF)
 drain_bat_final() {
   [[ -z "$BAT_OUT_FD" ]] && return
   local bat_line
-  while IFS= read -r bat_line <&${BAT_OUT_FD}; do
+  # The || keeps a last line that has no trailing newline
+  while IFS= read -r bat_line <&"${BAT_OUT_FD}" || [[ -n "$bat_line" ]]; do
     emit_text "${bat_line}"$'\n'
   done
 }
@@ -1123,197 +1268,72 @@ if [[ "$DEMO_OUTPUT" -eq 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# State variables for parsing the JSON stream
+# Ask claude
 # ---------------------------------------------------------------------------
-model=""
-session_id=""
-spinner_idx=0
-input_tokens=""
-output_tokens=""
-cache_creation_tokens=""
-cache_read_tokens=""
-cost=""
-duration_ms=""
-answer_text=""
-status="running"
+require_cmds "$CLAUDE_BIN"
+mkdir -p "$SESSION_DIR"
 
-# Temp file for accumulating raw JSON lines (avoids subshell variable loss)
-RAW_JSON_TMP=$(mktemp /tmp/claude-ask-raw.XXXXXX)
+RAW_JSON="$RUN_DIR/stream.jsonl"
+CLAUDE_STDERR="$RUN_DIR/claude.stderr"
+: > "$RAW_JSON"
 
-# ---------------------------------------------------------------------------
-# Draw initial status bar
-# ---------------------------------------------------------------------------
+reset_stream_state
 STREAM_START=$SECONDS
-spin_char="${SPINNER[$spinner_idx]}"
-update_status_bar "$spin_char" "connecting..." "" "" "" "" "running"
 
-# ---------------------------------------------------------------------------
-# Main loop: stream JSON from claude CLI and parse line by line
-# Using process substitution so variables persist in the current shell
-# ---------------------------------------------------------------------------
-debug_log "starting main loop, streaming from claude"
-while IFS= read -r line; do
-  # Save raw line to temp file for session saving
-  printf '%s\n' "$line" >> "$RAW_JSON_TMP"
-
-  # Skip empty lines
-  [[ -z "$line" ]] && continue
-
-  # Parse the JSON line with jq
-  line_type=$(printf '%s' "$line" | jq -r '.type // empty' 2> /dev/null) || continue
-  [[ -z "$line_type" ]] && continue
-
-  case "$line_type" in
-    system)
-      # Extract model and session_id from init message
-      model=$(printf '%s' "$line" | jq -r '.model // empty' 2> /dev/null) || true
-      session_id=$(printf '%s' "$line" | jq -r '.session_id // empty' 2> /dev/null) || true
-      # Clean up model name: strip context window suffix like [1m]
-      model="${model%%\[*}"
-      # Shorten model name
-      case "${model,,}" in
-        *haiku*) model="haiku" ;;
-        *sonnet*) model="sonnet" ;;
-        *opus*) model="opus" ;;
-      esac
-      debug_log "system msg: model=$model session_id=$session_id"
-      ;;
-
-    assistant)
-      content_type=$(printf '%s' "$line" | jq -r '.message.content[0].type // empty' 2> /dev/null) || true
-
-      if [[ "$content_type" == "thinking" ]]; then
-        is_thinking=1
-      elif [[ "$content_type" == "text" ]]; then
-        is_thinking=0
-        # Extract the text chunk
-        text_chunk=$(printf '%s' "$line" | jq -r '.message.content[0].text // empty' 2> /dev/null) || true
-        if [[ -n "$text_chunk" ]]; then
-          answer_text+="$text_chunk"
-          # Update stream metrics
-          text_chunks=$((text_chunks + 1))
-          answer_chars=$((answer_chars + ${#text_chunk}))
-          # Count newlines in chunk
-          nl_stripped="${text_chunk//[!$'\n']/}"
-          answer_lines=$((answer_lines + ${#nl_stripped}))
-          # Stream to terminal if enabled
-          if [[ "$STREAM_OUTPUT" -eq 1 ]]; then
-            write_chunk "$text_chunk"
-          fi
-        fi
-      fi
-
-      # Update token counts if present (usage is nested under .message for assistant events)
-      new_input=$(printf '%s' "$line" | jq -r '.message.usage.input_tokens // empty' 2> /dev/null) || true
-      new_output=$(printf '%s' "$line" | jq -r '.message.usage.output_tokens // empty' 2> /dev/null) || true
-      new_cache_creation=$(printf '%s' "$line" | jq -r '.message.usage.cache_creation_input_tokens // empty' 2> /dev/null) || true
-      new_cache_read=$(printf '%s' "$line" | jq -r '.message.usage.cache_read_input_tokens // empty' 2> /dev/null) || true
-
-      [[ -n "$new_input" ]] && input_tokens="$new_input"
-      [[ -n "$new_output" ]] && output_tokens="$new_output"
-      [[ -n "$new_cache_creation" ]] && cache_creation_tokens="$new_cache_creation"
-      [[ -n "$new_cache_read" ]] && cache_read_tokens="$new_cache_read"
-      ;;
-
-    result)
-      status="done"
-      cost=$(printf '%s' "$line" | jq -r '.total_cost_usd // empty' 2> /dev/null) || true
-      duration_ms=$(printf '%s' "$line" | jq -r '.duration_ms // empty' 2> /dev/null) || true
-
-      # Final token counts from result (usage is top-level for result events)
-      new_input=$(printf '%s' "$line" | jq -r '.usage.input_tokens // empty' 2> /dev/null) || true
-      new_output=$(printf '%s' "$line" | jq -r '.usage.output_tokens // empty' 2> /dev/null) || true
-      [[ -n "$new_input" ]] && input_tokens="$new_input"
-      [[ -n "$new_output" ]] && output_tokens="$new_output"
-      debug_log "result msg: cost=$cost duration_ms=$duration_ms in=$input_tokens out=$output_tokens"
-      ;;
-
-    rate_limit_event)
-      continue
-      ;;
-  esac
-
-  # Advance spinner
-  spinner_idx=$(((spinner_idx + 1) % ${#SPINNER[@]}))
-  spin_char="${SPINNER[$spinner_idx]}"
-  [[ "$status" == "done" ]] && spin_char="✓"
-
-  # Drain any rendered output from bat before updating status bar
-  drain_bat
-
-  # Format display values
-  disp_in=$(format_tokens "$input_tokens")
-  disp_out=$(format_tokens "$output_tokens")
-  disp_cost=$(format_cost "$cost")
-  disp_dur=$(format_duration "$duration_ms")
-
-  update_status_bar "$spin_char" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
-
-done < <(claude --output-format stream-json --verbose -p "$question" 2> /dev/null)
-
-# Close bat input and drain remaining rendered output
-if [[ -n "$BAT_OUT_FD" ]]; then
-  exec 3>&-
-  drain_bat_final
-  exec {BAT_OUT_FD}<&-
-  BAT_OUT_FD=""
-  wait "$BAT_PID" 2> /dev/null || true
-  BAT_PID=""
+if [[ "$USE_PAGER" -eq 1 && "$STREAM_OUTPUT" -eq 1 ]]; then
+  start_pager_pipe
 fi
 
-# In batch mode, render the complete answer now
-if [[ "$STREAM_OUTPUT" -eq 0 && -n "$answer_text" ]]; then
-  # Clear the status bar area (was showing progress only)
-  printf '\e[J'
-  STATUS_BAR_VISIBLE=0
-  if [[ "$USE_PAGER" -eq 1 ]]; then
-    printf '%s' "$answer_text" | $PAGER_CMD
-  else
-    printf '%s' "$answer_text"
+update_status_bar "${SPINNER[0]}" "connecting..." "" "" "" "" "running"
+
+# claude runs on its own fd so its exit status can be collected afterwards.
+# The question goes in on stdin, so one starting with "-" is never read as an
+# option (and it stays out of the process list).
+debug_log "starting main loop, streaming from $CLAUDE_BIN"
+exec {CLAUDE_FD}< <("$CLAUDE_BIN" --output-format stream-json --verbose -p <<< "$question" 2> "$CLAUDE_STDERR")
+CLAUDE_PID=$!
+
+while IFS= read -r line <&"$CLAUDE_FD"; do
+  printf '%s\n' "$line" >> "$RAW_JSON"
+  process_stream_line "$line" || continue
+  if [[ -n "$CHUNK" && "$STREAM_OUTPUT" -eq 1 ]]; then
+    write_chunk "$CHUNK"
   fi
-  printf '\n'
+  refresh_status_bar
+done
+
+exec {CLAUDE_FD}<&-
+claude_status=0
+wait "$CLAUDE_PID" || claude_status=$?
+CLAUDE_PID=""
+debug_log "claude exited: status=$claude_status stream_status=$status"
+
+stop_pager_pipe
+print_batch_answer
+
+# A stream that ended without a result event did not finish
+if [[ "$status" == "running" ]]; then
+  status="error"
+fi
+show_final_status_bar
+
+if [[ -n "$session_id" && -s "$RAW_JSON" ]]; then
+  save_session "$RAW_JSON" "$question" > /dev/null
 fi
 
-# Render final status bar below content (stays permanently)
-disp_in=$(format_tokens "$input_tokens")
-disp_out=$(format_tokens "$output_tokens")
-disp_cost=$(format_cost "$cost")
-disp_dur=$(format_duration "$duration_ms")
-finalize_status_bar "✓" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
-
 # ---------------------------------------------------------------------------
-# Save session
+# Report failures: claude's exit status, an error result, or no result
 # ---------------------------------------------------------------------------
-if [[ -n "$session_id" && -s "$RAW_JSON_TMP" ]]; then
-  session_slug=$(slugify_question "$question")
-  session_name=$(unique_session_name "$session_slug" "$SESSION_DIR")
-  session_file="${SESSION_DIR}/${session_name}.json"
-  debug_log "saving session: slug=$session_slug name=$session_name file=$session_file"
-
-  if [[ "$SAVE_RAW" -eq 1 ]]; then
-    cp "$RAW_JSON_TMP" "$session_file"
+if [[ "$claude_status" -ne 0 || "$status" == "error" ]]; then
+  if [[ -n "$stream_error" ]]; then
+    printf 'claude-ask: %s\n' "$stream_error" >&2
+  elif [[ "$claude_status" -ne 0 ]]; then
+    printf 'claude-ask: %s exited with status %d\n' "$CLAUDE_BIN" "$claude_status" >&2
   else
-    jq -s '
-      {
-        session_id: (map(select(.type == "system")) | first | .session_id // null),
-        model: (map(select(.type == "system")) | first | .model // null),
-        name: null,
-        question: null,
-        answer: (map(select(.type == "result")) | last | .result // null),
-        thinking: (map(select(.type == "assistant" and .message.content[0].type == "thinking")) | map(.message.content[0].thinking) | if length > 0 then join("\n") else null end),
-        cost_usd: (map(select(.type == "result")) | last | .total_cost_usd // null),
-        duration_ms: (map(select(.type == "result")) | last | .duration_ms // null),
-        duration_api_ms: (map(select(.type == "result")) | last | .duration_api_ms // null),
-        usage: {
-          input_tokens: (map(select(.type == "result")) | last | .usage.input_tokens // null),
-          output_tokens: (map(select(.type == "result")) | last | .usage.output_tokens // null),
-          cache_creation_input_tokens: (map(select(.type == "result")) | last | .usage.cache_creation_input_tokens // null),
-          cache_read_input_tokens: (map(select(.type == "result")) | last | .usage.cache_read_input_tokens // null)
-        },
-        timestamp: now | todate
-      }
-    ' "$RAW_JSON_TMP" \
-      | jq --arg q "$question" --arg n "$session_name" '.question = $q | .name = $n' \
-        > "$session_file"
+    printf 'claude-ask: the response ended without a result\n' >&2
   fi
+  if [[ -s "$CLAUDE_STDERR" ]]; then
+    sed 's/^/  /' "$CLAUDE_STDERR" >&2
+  fi
+  exit 1
 fi

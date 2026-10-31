@@ -82,18 +82,6 @@ load test_helper
   [ "$tokens" = "25" ]
 }
 
-@test "extracts cache creation tokens" {
-  parsed=$(parse_fixture "text_chunk.jsonl")
-  tokens=$(get_parsed "cache_creation_tokens" "$parsed")
-  [ "$tokens" = "5000" ]
-}
-
-@test "extracts cache read tokens" {
-  parsed=$(parse_fixture "text_chunk.jsonl")
-  tokens=$(get_parsed "cache_read_tokens" "$parsed")
-  [ "$tokens" = "3000" ]
-}
-
 @test "result message updates final token counts" {
   parsed=$(parse_fixture "full_session.jsonl")
   tokens=$(get_parsed "input_tokens" "$parsed")
@@ -133,10 +121,68 @@ load test_helper
 }
 
 # ---------------------------------------------------------------------------
-# Missing fields
+# Thinking, multiple content blocks, skipped lines
 # ---------------------------------------------------------------------------
-@test "handles session with no cache tokens" {
-  parsed=$(parse_fixture "haiku_session.jsonl")
-  cache=$(get_parsed "cache_creation_tokens" "$parsed")
-  [ -z "$cache" ]
+@test "thinking event sets is_thinking without adding answer text" {
+  parsed=$(parse_fixture "thinking.jsonl")
+  [ "$(get_parsed is_thinking "$parsed")" = "1" ]
+  [ -z "$(get_parsed answer_text "$parsed")" ]
+}
+
+@test "text after thinking clears is_thinking" {
+  parsed=$(parse_fixture "full_session.jsonl")
+  [ "$(get_parsed is_thinking "$parsed")" = "0" ]
+}
+
+@test "joins every text block of a message, not only the first" {
+  source_claude_ask
+  feed_stream "multi_block.jsonl"
+  [ "$answer_text" = $'First part. Second\tpart\nwith a newline.' ]
+  [ "$text_chunks" -eq 1 ]
+  [ "$answer_lines" -eq 1 ]
+  [ "$answer_chars" -eq "${#answer_text}" ]
+}
+
+@test "skips rate_limit_event and non-JSON lines" {
+  source_claude_ask
+  reset_stream_state
+  run process_stream_line '{"type":"rate_limit_event"}'
+  [ "$status" -eq 1 ]
+  run process_stream_line 'not json at all'
+  [ "$status" -eq 1 ]
+  run process_stream_line ''
+  [ "$status" -eq 1 ]
+  run process_stream_line '{"no_type":true}'
+  [ "$status" -eq 1 ]
+}
+
+@test "accepts events of unknown type without changing state" {
+  source_claude_ask
+  reset_stream_state
+  process_stream_line '{"type":"user","message":{"content":[{"type":"tool_result"}]}}'
+  [ -z "$answer_text" ]
+  [ "$status" = "running" ]
+}
+
+# ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+@test "error result sets status error and stream_error" {
+  parsed=$(parse_fixture "result_error.jsonl")
+  [ "$(get_parsed status "$parsed")" = "error" ]
+  [ "$(get_parsed stream_error "$parsed")" = "Invalid API key" ]
+}
+
+@test "successful result leaves stream_error empty" {
+  parsed=$(parse_fixture "full_session.jsonl")
+  [ -z "$(get_parsed stream_error "$parsed")" ]
+}
+
+# ---------------------------------------------------------------------------
+# Model names
+# ---------------------------------------------------------------------------
+@test "short_model_name keeps unknown model ids without the bracket suffix" {
+  source_claude_ask
+  [ "$(short_model_name "claude-fable-5-1[1m]")" = "claude-fable-5-1" ]
+  [ "$(short_model_name "claude-opus-4-6")" = "opus" ]
 }

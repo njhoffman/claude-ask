@@ -4,114 +4,72 @@
 load test_helper
 
 setup() {
+  common_setup
   source_claude_ask
-  export TEST_TEMP_DIR="$(mktemp -d)"
-  export SESSION_DIR="$TEST_TEMP_DIR/sessions"
-  mkdir -p "$SESSION_DIR"
 }
 
-@test "saves parsed session to correct file" {
-  local raw_tmp="$TEST_TEMP_DIR/raw.jsonl"
-  cp "${FIXTURES_DIR}/full_session.jsonl" "$raw_tmp"
+@test "saves parsed session named after the question" {
+  local file
+  file=$(save_session "$FIXTURES_DIR/full_session.jsonl" "What is the capital of France?")
 
-  local session_file="${SESSION_DIR}/full-session-001.json"
+  [ "$file" = "$SESSION_DIR/what-is-the-capital-of-france.json" ]
+  [ -f "$file" ]
+  [ "$(jq -r '.session_id' "$file")" = "full-session-001" ]
+  [[ "$(jq -r '.model' "$file")" == *"sonnet"* ]]
+  [ "$(jq -r '.name' "$file")" = "what-is-the-capital-of-france" ]
+  [ "$(jq -r '.question' "$file")" = "What is the capital of France?" ]
+  [[ "$(jq -r '.answer' "$file")" == *"Paris"* ]]
+  [ "$(jq -r '.cost_usd' "$file")" = "0.012345" ]
+  [ "$(jq -r '.duration_ms' "$file")" = "3200" ]
+  [ "$(jq -r '.is_error' "$file")" = "false" ]
+  [ "$(jq -r '.timestamp' "$file")" != "null" ]
+}
 
-  jq -s '
-    {
-      session_id: (map(select(.type == "system")) | first | .session_id // null),
-      model: (map(select(.type == "system")) | first | .model // null),
-      question: null,
-      answer: (map(select(.type == "result")) | last | .result // null),
-      thinking: (map(select(.type == "assistant" and .message.content[0].type == "thinking")) | map(.message.content[0].thinking) | if length > 0 then join("\n") else null end),
-      cost_usd: (map(select(.type == "result")) | last | .total_cost_usd // null),
-      duration_ms: (map(select(.type == "result")) | last | .duration_ms // null),
-      duration_api_ms: (map(select(.type == "result")) | last | .duration_api_ms // null),
-      usage: {
-        input_tokens: (map(select(.type == "result")) | last | .usage.input_tokens // null),
-        output_tokens: (map(select(.type == "result")) | last | .usage.output_tokens // null),
-        cache_creation_input_tokens: (map(select(.type == "result")) | last | (.usage.cache_creation_input_tokens // null)),
-        cache_read_input_tokens: (map(select(.type == "result")) | last | .usage.cache_read_input_tokens // null)
-      },
-      timestamp: now | todate
-    }
-  ' "$raw_tmp" | jq --arg q "What is the capital of France?" '.question = $q' > "$session_file"
-
-  [ -f "$session_file" ]
-
-  # Validate structure
-  session_id=$(jq -r '.session_id' "$session_file")
-  [ "$session_id" = "full-session-001" ]
-
-  model=$(jq -r '.model' "$session_file")
-  [[ "$model" == *"sonnet"* ]]
-
-  question=$(jq -r '.question' "$session_file")
-  [ "$question" = "What is the capital of France?" ]
-
-  answer=$(jq -r '.answer' "$session_file")
-  [[ "$answer" == *"Paris"* ]]
-
-  cost=$(jq -r '.cost_usd' "$session_file")
-  [ "$cost" = "0.012345" ]
-
-  dur=$(jq -r '.duration_ms' "$session_file")
-  [ "$dur" = "3200" ]
+@test "a second session with the same question gets a numbered name" {
+  save_session "$FIXTURES_DIR/full_session.jsonl" "same question" > /dev/null
+  local file
+  file=$(save_session "$FIXTURES_DIR/full_session.jsonl" "same question")
+  [ "$file" = "$SESSION_DIR/same-question-2.json" ]
 }
 
 @test "saved session includes thinking text" {
-  local raw_tmp="$TEST_TEMP_DIR/raw.jsonl"
-  cp "${FIXTURES_DIR}/full_session.jsonl" "$raw_tmp"
-  local session_file="${SESSION_DIR}/test.json"
+  local file
+  file=$(save_session "$FIXTURES_DIR/full_session.jsonl" "q")
+  [[ "$(jq -r '.thinking' "$file")" == *"think about"* ]]
+}
 
-  jq -s '
-    {
-      thinking: (map(select(.type == "assistant" and .message.content[0].type == "thinking")) | map(.message.content[0].thinking) | if length > 0 then join("\n") else null end)
-    }
-  ' "$raw_tmp" > "$session_file"
-
-  thinking=$(jq -r '.thinking' "$session_file")
-  [[ "$thinking" == *"think about"* ]]
+@test "saved session finds thinking in any content block" {
+  local file
+  file=$(save_session "$FIXTURES_DIR/multi_block.jsonl" "q")
+  [ "$(jq -r '.thinking' "$file")" = "Weighing the options." ]
 }
 
 @test "saved session includes usage tokens" {
-  local raw_tmp="$TEST_TEMP_DIR/raw.jsonl"
-  cp "${FIXTURES_DIR}/full_session.jsonl" "$raw_tmp"
-  local session_file="${SESSION_DIR}/test.json"
-
-  jq -s '
-    {
-      usage: {
-        input_tokens: (map(select(.type == "result")) | last | .usage.input_tokens // null),
-        output_tokens: (map(select(.type == "result")) | last | .usage.output_tokens // null),
-        cache_creation_input_tokens: (map(select(.type == "result")) | last | (.usage.cache_creation_input_tokens // null)),
-        cache_read_input_tokens: (map(select(.type == "result")) | last | .usage.cache_read_input_tokens // null)
-      }
-    }
-  ' "$raw_tmp" > "$session_file"
-
-  in_tokens=$(jq -r '.usage.input_tokens' "$session_file")
-  [ "$in_tokens" = "500" ]
-
-  out_tokens=$(jq -r '.usage.output_tokens' "$session_file")
-  [ "$out_tokens" = "15" ]
-
-  cache_create=$(jq -r '.usage.cache_creation_input_tokens' "$session_file")
-  [ "$cache_create" = "8000" ]
-
-  cache_read=$(jq -r '.usage.cache_read_input_tokens' "$session_file")
-  [ "$cache_read" = "4000" ]
+  local file
+  file=$(save_session "$FIXTURES_DIR/full_session.jsonl" "q")
+  [ "$(jq -r '.usage.input_tokens' "$file")" = "500" ]
+  [ "$(jq -r '.usage.output_tokens' "$file")" = "15" ]
+  [ "$(jq -r '.usage.cache_creation_input_tokens' "$file")" = "8000" ]
+  [ "$(jq -r '.usage.cache_read_input_tokens' "$file")" = "4000" ]
 }
 
-@test "raw save mode copies file directly" {
-  local raw_tmp="$TEST_TEMP_DIR/raw.jsonl"
-  cp "${FIXTURES_DIR}/full_session.jsonl" "$raw_tmp"
-  local session_file="${SESSION_DIR}/raw-test.jsonl"
+@test "saved session records an error result" {
+  local file
+  file=$(save_session "$FIXTURES_DIR/result_error.jsonl" "q")
+  [ "$(jq -r '.is_error' "$file")" = "true" ]
+  [ "$(jq -r '.answer' "$file")" = "Invalid API key" ]
+}
 
-  cp "$raw_tmp" "$session_file"
+@test "raw save mode also writes the stream unchanged as .jsonl" {
+  SAVE_RAW=1
+  local file
+  file=$(save_session "$FIXTURES_DIR/full_session.jsonl" "raw test")
+  [ "$file" = "$SESSION_DIR/raw-test.json" ]
+  [ "$(jq -r '.session_id' "$file")" = "full-session-001" ]
+  cmp "$SESSION_DIR/raw-test.jsonl" "$FIXTURES_DIR/full_session.jsonl"
+}
 
-  [ -f "$session_file" ]
-  # Should have multiple lines (one per JSON object)
-  local line_count
-  line_count=$(wc -l < "$session_file")
-  [ "$line_count" -ge 3 ]
+@test "without --save-raw no .jsonl is written" {
+  save_session "$FIXTURES_DIR/full_session.jsonl" "plain" > /dev/null
+  [ ! -e "$SESSION_DIR/plain.jsonl" ]
 }

@@ -4,6 +4,7 @@
 load test_helper
 
 setup() {
+  common_setup
   source_claude_ask
 }
 
@@ -190,4 +191,23 @@ setup() {
 @test "render_stream_info: hides thinking when done" {
   result=$(render_stream_info "10" "500" "5" "30" "done" "1")
   [[ "$result" != *"thinking"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Locale independence
+# ---------------------------------------------------------------------------
+@test "formats numbers with a dot under a comma-decimal locale" {
+  locale -a 2> /dev/null | grep -qi '^de_DE\.utf-\?8$' || skip "de_DE.UTF-8 locale not installed"
+  export LC_ALL=de_DE.UTF-8
+  run "$SCRIPT_PATH" --no-pager "test"
+  [ "$status" -eq 0 ]
+  output_clean=$(echo "$output" | strip_ansi)
+  [[ "$output_clean" == *'$0.0123'* ]]
+  [[ "$output_clean" == *"3.2s"* ]]
+}
+
+@test "debug log timestamps have milliseconds" {
+  run "$SCRIPT_PATH" --no-pager --debug-log="$TEST_TEMP_DIR/debug.log" "test"
+  [ "$status" -eq 0 ]
+  grep -Eq '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}\] args parsed' "$TEST_TEMP_DIR/debug.log"
 }
