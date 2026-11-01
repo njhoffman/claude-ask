@@ -1,16 +1,29 @@
 #!/bin/bash
 # Stand-in for the claude CLI in tests (CLAUDE_ASK_BIN points here).
-#   CLAUDE_STUB_FIXTURE  stream-json file to print on stdout
-#   CLAUDE_STUB_DELAY    seconds to wait before each line (default: none)
-#   CLAUDE_STUB_STDERR   text to print on stderr
-#   CLAUDE_STUB_EXIT     exit status (default 0)
-#   CLAUDE_STUB_ARGS     file that receives the arguments, one per line
-#   CLAUDE_STUB_STDIN    file that receives stdin (the question)
+#   CLAUDE_STUB_FIXTURE    stream-json file to print on stdout
+#   CLAUDE_STUB_DELAY      seconds to wait before each line (default: none)
+#   CLAUDE_STUB_STDERR     text to print on stderr
+#   CLAUDE_STUB_EXIT       exit status (default 0)
+#   CLAUDE_STUB_ARGS       file that receives the arguments, one per line
+#   CLAUDE_STUB_STDIN      file that receives stdin (the question)
+#   CLAUDE_STUB_LOG        file that gets one line per call: "args | question"
+#   CLAUDE_STUB_FAIL_CALL  call number (counted in CLAUDE_STUB_LOG) that fails
+#                          with exit 2, no output and "stub failure" on stderr
+question=$(cat)
 if [[ -n "${CLAUDE_STUB_ARGS:-}" ]]; then
   printf '%s\n' "$@" > "$CLAUDE_STUB_ARGS"
 fi
 if [[ -n "${CLAUDE_STUB_STDIN:-}" ]]; then
-  cat > "$CLAUDE_STUB_STDIN"
+  printf '%s\n' "$question" > "$CLAUDE_STUB_STDIN"
+fi
+call=1
+if [[ -n "${CLAUDE_STUB_LOG:-}" ]]; then
+  printf '%s | %s\n' "$*" "${question//$'\n'/\\n}" >> "$CLAUDE_STUB_LOG"
+  call=$(wc -l < "$CLAUDE_STUB_LOG")
+fi
+if [[ -n "${CLAUDE_STUB_FAIL_CALL:-}" && "$call" -eq "$CLAUDE_STUB_FAIL_CALL" ]]; then
+  echo "stub failure" >&2
+  exit 2
 fi
 if [[ -n "${CLAUDE_STUB_FIXTURE:-}" ]]; then
   while IFS= read -r line; do

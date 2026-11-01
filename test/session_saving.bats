@@ -100,3 +100,29 @@ setup() {
   [[ "$output" == *"session-full-ses"* ]]
   [ -z "$(ls -A "$SESSION_DIR" | grep '^\.')" ]
 }
+
+@test "model and cwd come from the init event when hook events come first" {
+  local file
+  file=$(save_session "$FIXTURES_DIR/hooks_first.jsonl" "hooks")
+  [ "$(jq -r '.model' "$file")" = "claude-opus-5-5" ]
+  [ "$(jq -r '.cwd' "$file")" = "/work/project" ]
+  [ "$(jq -r '.session_id' "$file")" = "hooks-session-001" ]
+}
+
+@test "a second turn is added to an existing session file" {
+  local file
+  file=$(save_session "$FIXTURES_DIR/full_session.jsonl" "first")
+  save_session "$FIXTURES_DIR/haiku_session.jsonl" "second" "$file" > /dev/null
+  [ "$(jq -r '.turn_count' "$file")" = "2" ]
+  [ "$(jq -r '.answer' "$file")" = "Quick answer." ]
+  [ "$(jq -r '.usage.input_tokens' "$file")" = "550" ]
+  [ "$(jq -r '.turns[0].answer' "$file")" = "The capital of France is **Paris**." ]
+}
+
+@test "an old single-turn file becomes the first turn" {
+  jq -n '{session_id: "s1", model: "opus", name: "legacy", question: "old q",
+    answer: "old a", cost_usd: 0.5, timestamp: "2026-01-01T00:00:00Z"}' > "$SESSION_DIR/legacy.json"
+  save_session "$FIXTURES_DIR/full_session.jsonl" "new q" "$SESSION_DIR/legacy.json" > /dev/null
+  [ "$(jq -r '[.turns[].question] | join(",")' "$SESSION_DIR/legacy.json")" = "old q,new q" ]
+  [ "$(jq -r '.cost_usd' "$SESSION_DIR/legacy.json")" = "0.512345" ]
+}

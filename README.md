@@ -6,8 +6,12 @@ pager, with a status bar (model, tokens, cost, time) drawn just below the
 text as it arrives; the final bar stays under the answer.
 
 ```sh
-claude-ask "Explain git rebase"          # ask
-claude-ask                               # compose the question in $EDITOR
+claude-ask "Explain git rebase"          # ask once
+claude-ask                               # chat: a "> " prompt after each answer
+claude-ask -i "Explain git rebase"       # ask, then keep chatting
+claude-ask -r "And with --onto?"         # follow up in the most recent session
+claude-ask -r                            # continue the most recent session as a chat
+git diff | claude-ask                    # piped input is the question
 claude-ask --theme powerline "..."       # minimal | bubbles | powerline
 claude-ask --history                     # saved sessions
 claude-ask --session 1                   # replay the newest one
@@ -22,6 +26,12 @@ overrides); `CLAUDE_ASK_BIN` names a different `claude` command. When
 `claude` fails, its error is printed and `claude-ask` exits non-zero.
 `--debug-log` writes to `~/.local/state/claude-ask/debug.log`
 (`--debug-log=FILE` for another file).
+
+In a chat, `\e` at the prompt composes the question in `$EDITOR`; `exit`,
+`quit` or Ctrl-D ends it, and Ctrl-C stops the answer being streamed without
+leaving the chat. Questions are kept in `~/.local/state/claude-ask/history`
+for the up arrow. Each conversation is one session file with a `turns` list;
+`--history` shows the turn count and `--session` replays every turn.
 
 ## Install
 

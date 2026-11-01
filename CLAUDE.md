@@ -23,6 +23,15 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Demos**: `--demo-themes` and `--demo-output` render without calling Claude
   (`CLAUDE_ASK_DEMO_DELAY=0` removes the frame delay; the tests set it).
 - **Question**: passed to `claude -p` on stdin, never as an argument.
+- **Chat and resume**: `ask_once` runs one turn (stream, save, report);
+  `chat_loop` reads `> ` prompts and calls it; `CONV_*` holds the
+  conversation (session file, claude session id for `--resume`, turns, total
+  cost). `-r` loads the newest session file. No question + a terminal on
+  stdin means chat; `CLAUDE_ASK_FORCE_INTERACTIVE` lets tests chat over a pipe.
+- **Session files**: one per conversation; `turns` plus top-level first
+  question, last answer and totals (`SESSION_JQ`). Files from before turns are
+  read as one turn (`SESSION_TURNS_JQ`'s `turns_of`). Model and cwd come from
+  the `init` system event; hook events come before it.
 - **Stream parsing**: `process_stream_line` (one `jq` call per event) updates
   the state variables and is the only parser: the main loop, `--demo-output`
   and the tests all call it. `save_session` writes session files.

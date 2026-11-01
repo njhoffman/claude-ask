@@ -5,22 +5,18 @@ bats_require_minimum_version 1.5.0
 
 load test_helper
 
-@test "opens editor when no arguments given and exits if empty" {
-  export EDITOR="true"  # no-op, leaves file empty
-  run "$SCRIPT_PATH"
+@test "no question and empty piped input is an error" {
+  run "$SCRIPT_PATH" --no-pager < /dev/null
   [ "$status" -eq 1 ]
   [[ "$output" == *"No question provided"* ]]
 }
 
-@test "uses editor content as question when no arguments given" {
-  fake_editor="$TEST_TEMP_DIR/fake-editor"
-  printf '#!/bin/bash\necho "test question" > "$1"\n' > "$fake_editor"
-  chmod +x "$fake_editor"
-  export EDITOR="$fake_editor"
-  export CLAUDE_STUB_STDIN="$TEST_TEMP_DIR/claude-stdin"
-  run "$SCRIPT_PATH" --no-pager
+@test "piped input with no question is asked once, not as a chat" {
+  export CLAUDE_STUB_LOG="$TEST_TEMP_DIR/calls"
+  run "$SCRIPT_PATH" --no-pager < <(printf 'line one\nline two\n')
   [ "$status" -eq 0 ]
-  grep -qx "test question" "$CLAUDE_STUB_STDIN"
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+  grep -qF '| line one\nline two' "$CLAUDE_STUB_LOG"
 }
 
 @test "--help prints usage and exits 0" {

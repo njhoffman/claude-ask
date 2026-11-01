@@ -4,7 +4,16 @@
 #
 # Usage: claude-ask [OPTIONS] ["question"]
 #
+# With no question (and a terminal on stdin) it opens a chat: each answer is
+# followed by a "> " prompt for the next question in the same conversation.
+# At the prompt, \e composes the question in $EDITOR; exit, quit or Ctrl-D
+# ends the chat; Ctrl-C stops the current answer. Piped input with no
+# question is read as one question.
+#
 # Options:
+#   -i, --interactive  Keep the chat open after answering the question
+#   -r, --resume       Continue the most recent saved session (with a
+#                      question: ask it there; without: chat there)
 #   --theme THEME      Status bar theme: minimal, bubbles, powerline (default: minimal)
 #   --pager CMD        Pager command for markdown output, run with bash -c (default: nvimpager)
 #   --no-pager         Disable pager, output raw text
@@ -20,8 +29,12 @@
 #   -h, --help         Show this help message
 #
 # Examples:
-#   claude-ask                                    # opens $EDITOR to compose question
+#   claude-ask                                    # start a chat
 #   claude-ask "What is the capital of France?"
+#   claude-ask -i "Explain git rebase"            # answer, then keep chatting
+#   claude-ask -r "And with --onto?"              # follow up in the last session
+#   claude-ask -r                                 # continue the last session as a chat
+#   git diff | claude-ask                         # piped input is the question
 #   claude-ask --theme powerline "Explain git rebase"
 #   claude-ask --demo-themes
 #   claude-ask --no-pager "List common bash shortcuts"
@@ -34,6 +47,7 @@
 #   SESSION_DIR        Where sessions are saved (default: ~/.local/share/claude/cli-sessions)
 #   CLAUDE_ASK_BIN     The claude command to run (default: claude)
 #   CLAUDE_ASK_DEMO_DELAY  Seconds between demo frames (default: 0.08 themes, 0.03 output)
+#   CLAUDE_ASK_FORCE_INTERACTIVE  Chat even when stdin is not a terminal (tests)
 
 set -euo pipefail
 
@@ -60,8 +74,12 @@ DEMO_THEMES=0
 DEMO_OUTPUT=0
 SHOW_HISTORY=0
 VIEW_SESSION=""
+INTERACTIVE=0
+RESUME=0
 DEBUG_LOG=""
-DEFAULT_DEBUG_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/claude-ask/debug.log"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-ask"
+DEFAULT_DEBUG_LOG="$STATE_DIR/debug.log"
+CHAT_HISTORY_FILE="$STATE_DIR/history"
 MAX_DISPLAY_NAME=20
 SESSION_DIR="${SESSION_DIR:-$HOME/.local/share/claude/cli-sessions}"
 CLAUDE_BIN="${CLAUDE_ASK_BIN:-claude}"
@@ -120,6 +138,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-pager)
       USE_PAGER=0
+      shift
+      ;;
+    -i | --interactive)
+      INTERACTIVE=1
+      shift
+      ;;
+    -r | --resume)
+      RESUME=1
       shift
       ;;
     --demo-themes)
@@ -205,21 +231,23 @@ require_cmds jq
 
 debug_log "args parsed: THEME=$THEME USE_PAGER=$USE_PAGER SAVE_RAW=$SAVE_RAW SHOW_HISTORY=$SHOW_HISTORY VIEW_SESSION=$VIEW_SESSION"
 
-if [[ "$DEMO_THEMES" -eq 0 && "$DEMO_OUTPUT" -eq 0 && "$SHOW_HISTORY" -eq 0 && -z "$VIEW_SESSION" && ${#POSITIONAL[@]} -eq 0 ]]; then
-  # No question provided -- open $EDITOR for interactive input
-  debug_log "no positional args, opening editor"
-  tmpfile="$(mktemp "${TMPDIR:-/tmp}/claude-ask-XXXXXX")"
-  "${EDITOR:-vi}" "$tmpfile"
-  question="$(cat "$tmpfile")"
-  rm -f "$tmpfile"
-  debug_log "editor returned, question_len=${#question}"
-  if [[ ! "$question" =~ [^[:space:]] ]]; then
-    echo "No question provided." >&2
-    exit 1
+question="${POSITIONAL[*]:-}"
+
+# Chat when there is no question and a person is typing; piped input with no
+# question is the question itself
+if [[ "$DEMO_THEMES" -eq 0 && "$DEMO_OUTPUT" -eq 0 && "$SHOW_HISTORY" -eq 0 && -z "$VIEW_SESSION" && -z "$question" ]]; then
+  if [[ -t 0 || -n "${CLAUDE_ASK_FORCE_INTERACTIVE:-}" ]]; then
+    INTERACTIVE=1
+  elif [[ "$INTERACTIVE" -eq 0 ]]; then
+    question="$(cat)"
+    debug_log "question read from stdin, length=${#question}"
+    if [[ ! "$question" =~ [^[:space:]] ]]; then
+      echo "No question provided." >&2
+      exit 1
+    fi
   fi
-else
-  question="${POSITIONAL[*]:-}"
 fi
+debug_log "mode: INTERACTIVE=$INTERACTIVE RESUME=$RESUME question_len=${#question}"
 
 # ---------------------------------------------------------------------------
 # Catppuccin Mocha palette -> ANSI 256/truecolor escape sequences
@@ -443,9 +471,10 @@ format_elapsed() {
   fi
 }
 
-# OUT lines chars chunks elapsed status is_thinking: the line under the bar
+# OUT lines chars chunks elapsed status is_thinking [extra]: the line under
+# the bar; extra (e.g. "turn 3 | $0.0412 total") is appended
 render_stream_info() {
-  local _out="$1" _lines="$2" _chars="$3" _chunks="$4" _elapsed="$5" _is_done="$6" _is_thinking="${7:-0}"
+  local _out="$1" _lines="$2" _chars="$3" _chunks="$4" _elapsed="$5" _is_done="$6" _is_thinking="${7:-0}" _extra="${8:-}"
   local _info="  ${FG_DIM}" _count_str _elapsed_str
   if [[ "$_is_thinking" -eq 1 && "$_is_done" != "done" ]]; then
     _info+="thinking... ${FG_DIM}|${RST}${FG_DIM} "
@@ -457,6 +486,9 @@ render_stream_info() {
   if [[ "$_is_done" != "done" && -n "$_elapsed" ]]; then
     format_elapsed _elapsed_str "$_elapsed"
     _info+=" ${FG_DIM}|${RST}${FG_DIM} ${_elapsed_str}"
+  fi
+  if [[ -n "$_extra" ]]; then
+    _info+=" ${FG_DIM}|${RST}${FG_DIM} ${_extra}"
   fi
   _info+="${RST}"
   printf -v "$_out" '%s' "$_info"
@@ -570,18 +602,35 @@ run_pager() {
 # ---------------------------------------------------------------------------
 # Session saving
 # ---------------------------------------------------------------------------
+# A session file holds one conversation: "turns" lists every question and
+# answer; the top level keeps the first question, the last answer and the
+# totals (cost, durations, tokens) so older readers still find them. Files
+# saved before turns existed are read as a single turn (SESSION_TURNS_JQ).
+#
+# shellcheck disable=SC2016 # jq programs
+SESSION_TURNS_JQ='
+  def turns_of:
+    if .turns then .turns
+    else [{question, answer, is_error: (.is_error // false), thinking,
+           cost_usd, duration_ms, duration_api_ms, usage, timestamp}]
+    end;'
+
+# Build one turn from a raw stream (NUL-free, one JSON event per line) and add
+# it to $prev (the existing session, or none). The init event, not the first
+# system event, has model and cwd: hook events come before it.
 # shellcheck disable=SC2016 # jq program
-SESSION_JQ='
-  (map(select(.type == "system")) | first) as $init
-  | (map(select(.type == "result")) | last) as $res
+SESSION_JQ="${SESSION_TURNS_JQ}"'
+  def total(f): [.[] | f | numbers] | if length > 0 then add else null end;
+  [inputs | fromjson? | objects] as $events
+  | ($events | map(select(.type == "system" and .subtype == "init")) | first) as $init
+  | ($events | map(select(.type == "system")) | first) as $sys
+  | ($events | map(select(.type == "result")) | last) as $res
+  | ($prev | first) as $p
   | {
-      session_id: ($init.session_id // null),
-      model: ($init.model // null),
-      name: $name,
       question: $question,
       answer: ($res.result // null),
       is_error: ($res.is_error // false),
-      thinking: ([.[] | select(.type == "assistant") | .message.content[]?
+      thinking: ([$events[] | select(.type == "assistant") | .message.content[]?
                   | select(.type == "thinking") | .thinking]
                  | if length > 0 then join("\n") else null end),
       cost_usd: ($res.total_cost_usd // null),
@@ -594,16 +643,38 @@ SESSION_JQ='
         cache_read_input_tokens: ($res.usage.cache_read_input_tokens // null)
       },
       timestamp: (now | todate)
+    } as $turn
+  | (if $p then ($p | turns_of) else [] end) + [$turn] as $turns
+  | {
+      session_id: ($init.session_id // $sys.session_id // $p.session_id // null),
+      model: ($init.model // $p.model // null),
+      name: $name,
+      cwd: ($p.cwd // $init.cwd // null),
+      question: $turns[0].question,
+      answer: ($turns | last | .answer),
+      is_error: ($turns | last | .is_error),
+      thinking: ($turns | last | .thinking),
+      cost_usd: ($turns | total(.cost_usd)),
+      duration_ms: ($turns | total(.duration_ms)),
+      duration_api_ms: ($turns | total(.duration_api_ms)),
+      usage: {
+        input_tokens: ($turns | total(.usage.input_tokens)),
+        output_tokens: ($turns | total(.usage.output_tokens)),
+        cache_creation_input_tokens: ($turns | total(.usage.cache_creation_input_tokens)),
+        cache_read_input_tokens: ($turns | total(.usage.cache_read_input_tokens))
+      },
+      turn_count: ($turns | length),
+      turns: $turns,
+      timestamp: $turn.timestamp
     }'
 
-# Save a raw stream-json file as a session in SESSION_DIR, plus a copy of the
-# raw stream as NAME.jsonl with --save-raw; prints the session file's path
-save_session() {
-  local raw="$1" question="$2" slug sid name file
+# Name for a new session file: the question's slug, or for a question with
+# no ASCII letters or digits (e.g. CJK only) the session id or the time,
+# rather than a hidden ".json"
+new_session_name() {
+  local raw="$1" question="$2" slug sid
   slug=$(slugify_question "$question")
   if [[ -z "$slug" ]]; then
-    # No ASCII letters or digits (e.g. a CJK-only question): name the session
-    # after its id, or the time, rather than saving a hidden ".json"
     sid=$(jq -nR -r '[inputs | fromjson? | objects | select(.type == "system")]
       | first | .session_id // empty' "$raw")
     if [[ -n "$sid" ]]; then
@@ -612,14 +683,34 @@ save_session() {
       printf -v slug 'session-%(%Y%m%d-%H%M%S)T' -1
     fi
   fi
-  name=$(unique_session_name "$slug" "$SESSION_DIR")
-  file="${SESSION_DIR}/${name}.json"
-  debug_log "saving session: name=$name file=$file"
-  # Lines that are not JSON objects are skipped rather than failing the save
-  jq -nR --arg question "$question" --arg name "$name" \
-    "[inputs | fromjson? | objects] | ${SESSION_JQ}" "$raw" > "$file"
+  unique_session_name "$slug" "$SESSION_DIR"
+}
+
+# save_session RAW QUESTION [FILE]: add the turn in RAW to FILE (an existing
+# session), or to a new session file named after QUESTION. With --save-raw
+# the raw stream is also appended to NAME.jsonl. Prints the file's path.
+save_session() {
+  local raw="$1" question="$2" file="${3:-}" name prev tmp
+  if [[ -n "$file" && -f "$file" ]]; then
+    name=$(basename "$file" .json)
+    prev="$file"
+  else
+    name=$(new_session_name "$raw" "$question")
+    file="${SESSION_DIR}/${name}.json"
+    prev=/dev/null
+  fi
+  debug_log "saving session turn: name=$name file=$file"
+  # Written beside the target and moved, so a failed save leaves the old file
+  tmp="${file}.tmp.$$"
+  if jq -nR --arg question "$question" --arg name "$name" --slurpfile prev "$prev" \
+    "$SESSION_JQ" "$raw" > "$tmp"; then
+    mv -f "$tmp" "$file"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
   if [[ "$SAVE_RAW" -eq 1 ]]; then
-    cp "$raw" "${SESSION_DIR}/${name}.jsonl"
+    cat "$raw" >> "${SESSION_DIR}/${name}.jsonl"
   fi
   printf '%s\n' "$file"
 }
@@ -978,13 +1069,22 @@ show_history() {
     return 1
   fi
 
-  local idx=1
+  local idx=1 f fields=()
   for f in "${files[@]}"; do
-    local name ts question_text answer_lines time_ago disp_name disp_q
+    local name ts question_text answer_lines turn_count time_ago disp_name disp_q
     name=$(basename "$f" .json)
-    ts=$(jq -r '.timestamp // empty' "$f" 2> /dev/null) || true
-    question_text=$(jq -r '.question // empty' "$f" 2> /dev/null) || true
-    answer_lines=$(jq -r '.answer // "" | split("\n") | length' "$f" 2> /dev/null) || true
+    # One jq call per file: last timestamp, first question, answer lines over
+    # all turns, number of turns
+    fields=()
+    mapfile -d '' -t fields < <(jq -j "${SESSION_TURNS_JQ}"'
+      turns_of as $t
+      | [(.timestamp // ""), ($t[0].question // ""),
+         ($t | map(.answer // "" | split("\n") | length) | add // 0), ($t | length)]
+      | map(tostring + "\u0000") | add' "$f" 2> /dev/null)
+    ts="${fields[0]:-}"
+    question_text="${fields[1]:-}"
+    answer_lines="${fields[2]:-0}"
+    turn_count="${fields[3]:-1}"
 
     # Truncate name with ellipsis
     disp_name="$name"
@@ -1001,8 +1101,10 @@ show_history() {
     time_ago=""
     [[ -n "$ts" ]] && time_ago=$(format_time_ago "$ts")
 
-    printf '%d | %-13s | %-*s | %-40s | %sL\n' \
-      "$idx" "$time_ago" "$((MAX_DISPLAY_NAME + 1))" "$disp_name" "$disp_q" "$answer_lines"
+    local size="${answer_lines}L"
+    if [[ "$turn_count" -gt 1 ]]; then size+=" ${turn_count}T"; fi
+    printf '%d | %-13s | %-*s | %-40s | %s\n' \
+      "$idx" "$time_ago" "$((MAX_DISPLAY_NAME + 1))" "$disp_name" "${disp_q//$'\n'/ }" "$size"
 
     ((idx++))
   done
@@ -1062,34 +1164,50 @@ view_session() {
   fi
 
   debug_log "viewing session: $session_file"
+  show_turns "$session_file" all
+}
 
-  # Extract session data
-  local s_model s_cost s_dur s_input s_output s_answer
-  s_model=$(jq -r '.model // "unknown"' "$session_file")
-  s_cost=$(jq -r '.cost_usd // empty' "$session_file")
-  s_dur=$(jq -r '.duration_ms // empty' "$session_file")
-  s_input=$(jq -r '.usage.input_tokens // empty' "$session_file")
-  s_output=$(jq -r '.usage.output_tokens // empty' "$session_file")
-  s_answer=$(jq -r '.answer // ""' "$session_file")
+# show_turns FILE all|last: replay a session's turns (question, status bar,
+# answer through the pager)
+show_turns() {
+  local file="$1" which="$2" model fields=() i
+  model=$(jq -r '.model // "unknown"' "$file")
+  model=$(short_model_name "$model")
+  # Seven NUL-terminated fields per turn
+  mapfile -d '' -t fields < <(jq -j --arg which "$which" "${SESSION_TURNS_JQ}"'
+    turns_of | (if $which == "last" then [last] else . end)[]
+    | [.question, .answer, (.is_error // false), .cost_usd, .duration_ms,
+       .usage.input_tokens, .usage.output_tokens]
+    | map((. // "" | tostring) + "\u0000") | add' "$file")
+  for ((i = 0; i + 6 < ${#fields[@]}; i += 7)); do
+    if ((i > 0)); then printf '\n'; fi
+    show_turn "$model" "${fields[@]:i:7}"
+  done
+}
 
-  s_model=$(short_model_name "$s_model")
+# show_turn MODEL QUESTION ANSWER IS_ERROR COST DURATION_MS IN OUT
+show_turn() {
+  local model="$1" q="$2" answer="$3" is_error="$4"
+  local disp_in disp_out disp_cost disp_dur bar_text mark="✓" state="done"
+  if [[ "$is_error" == "true" ]]; then
+    mark="✗"
+    state="error"
+  fi
+  format_cost disp_cost "$5"
+  format_duration disp_dur "$6"
+  format_tokens disp_in "$7"
+  format_tokens disp_out "$8"
 
-  # Format display values
-  local disp_in disp_out disp_cost disp_dur bar_text
-  format_tokens disp_in "$s_input"
-  format_tokens disp_out "$s_output"
-  format_cost disp_cost "$s_cost"
-  format_duration disp_dur "$s_dur"
-
-  # Render status bar inline (not pinned to terminal row 1)
-  render_status_bar bar_text "✓" "$s_model" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "done"
+  if [[ -n "$q" ]]; then
+    printf '%s> %s%s\n' "$FG_DIM" "$q" "$RST"
+  fi
+  render_status_bar bar_text "$mark" "$model" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$state"
   printf '%s\n\n' "$bar_text"
 
-  # Pipe answer through pager
   if [[ "$USE_PAGER" -eq 1 ]]; then
-    printf '%s' "$s_answer" | run_pager
+    printf '%s' "$answer" | run_pager
   else
-    printf '%s' "$s_answer"
+    printf '%s' "$answer"
   fi
   printf '\n'
 }
@@ -1136,7 +1254,7 @@ emit_text() {
 update_status_bar() {
   local bar_text info_text
   render_status_bar bar_text "$@"
-  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking"
+  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking" "${CONV_INFO:-}"
   # Clear from cursor to end of screen (removes old status bar + info)
   printf '\e[J'
   # Move down 2 lines, print status bar, then info line below
@@ -1149,7 +1267,7 @@ update_status_bar() {
 finalize_status_bar() {
   local bar_text info_text
   render_status_bar bar_text "$@"
-  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "" "done" "$is_thinking"
+  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "" "done" "$is_thinking" "${CONV_INFO:-}"
   # Clear from cursor to end of screen
   printf '\e[J'
   # Print final status bar + info line 2 lines below content
@@ -1216,6 +1334,7 @@ BAT_FIFO=""
 BAT_OUT_FD=""
 CLAUDE_PID=""
 
+# shellcheck disable=SC2317 # called by trap
 cleanup() {
   debug_log "cleanup called"
   # Clear any lingering status bar below content
@@ -1228,7 +1347,21 @@ cleanup() {
   if [[ -n "$BAT_OUT_FD" ]]; then exec {BAT_OUT_FD}<&- 2> /dev/null || true; fi
   rm -rf "$RUN_DIR" 2> /dev/null || true
 }
-trap cleanup EXIT INT TERM
+# Ctrl-C: in a chat it stops the answer being streamed (or clears the prompt
+# line) and the chat goes on; otherwise it ends the run like before
+TURN_INTERRUPTED=0
+# shellcheck disable=SC2317 # called by trap
+on_interrupt() {
+  TURN_INTERRUPTED=1
+  if [[ "$INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "$CLAUDE_PID" ]]; then kill "$CLAUDE_PID" 2> /dev/null || true; fi
+    return 0
+  fi
+  exit 130
+}
+trap cleanup EXIT
+trap on_interrupt INT
+trap 'exit 143' TERM
 
 # ---------------------------------------------------------------------------
 # Streaming pager: the pager reads chunks from a FIFO and its rendered output
@@ -1304,72 +1437,239 @@ if [[ "$DEMO_OUTPUT" -eq 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Ask claude
+# Conversation state: the session file and claude session id the next
+# question continues (empty for a new conversation), turns so far, total cost
+# ---------------------------------------------------------------------------
+CONV_FILE=""
+CONV_SESSION_ID=""
+CONV_TURNS=0
+CONV_COST=""
+CONV_INFO=""
+LAST_TURN_STATUS=0
+
+# ask_once QUESTION: stream one answer, continuing the conversation when
+# there is one, and save the turn. Returns 0, 1 when claude failed, or 130
+# when the answer was interrupted (chat mode only).
+ask_once() {
+  local q="$1" line claude_status=0 saved_file total
+  local claude_args=(--output-format stream-json --verbose -p)
+  if [[ -n "$CONV_SESSION_ID" ]]; then
+    claude_args+=(--resume "$CONV_SESSION_ID")
+  fi
+
+  : > "$RAW_JSON"
+  : > "$CLAUDE_STDERR"
+  reset_stream_state
+  STREAM_START=$SECONDS
+  CURSOR_COL=1
+  TURN_INTERRUPTED=0
+  CONV_INFO=""
+  if ((CONV_TURNS > 0)); then CONV_INFO="turn $((CONV_TURNS + 1))"; fi
+
+  if [[ "$USE_PAGER" -eq 1 && "$STREAM_OUTPUT" -eq 1 ]]; then
+    start_pager_pipe
+  fi
+  update_status_bar "${SPINNER[0]}" "connecting..." "" "" "" "" "running"
+
+  # claude runs on its own fd so its exit status can be collected afterwards.
+  # The question goes in on stdin, so one starting with "-" is never read as
+  # an option (and it stays out of the process list).
+  debug_log "asking: resume=${CONV_SESSION_ID:-none} question_len=${#q}"
+  exec {CLAUDE_FD}< <("$CLAUDE_BIN" "${claude_args[@]}" <<< "$q" 2> "$CLAUDE_STDERR")
+  CLAUDE_PID=$!
+
+  # A Ctrl-C interrupts the read; on_interrupt has already stopped claude
+  while ((!TURN_INTERRUPTED)) && IFS= read -r line <&"$CLAUDE_FD"; do
+    printf '%s\n' "$line" >> "$RAW_JSON"
+    process_stream_line "$line" || continue
+    if [[ -n "$CHUNK" && "$STREAM_OUTPUT" -eq 1 ]]; then
+      write_chunk "$CHUNK"
+    fi
+    refresh_status_bar
+  done
+
+  exec {CLAUDE_FD}<&-
+  if ((TURN_INTERRUPTED)); then kill "$CLAUDE_PID" 2> /dev/null || true; fi
+  wait "$CLAUDE_PID" || claude_status=$?
+  CLAUDE_PID=""
+  debug_log "claude exited: status=$claude_status stream_status=$status interrupted=$TURN_INTERRUPTED"
+
+  stop_pager_pipe
+
+  # An interrupted answer is not saved: claude sent no result for it
+  if ((TURN_INTERRUPTED)); then
+    printf '\e[J'
+    STATUS_BAR_VISIBLE=0
+    printf '\n%s(interrupted)%s\n' "$FG_DIM" "$RST"
+    return 130
+  fi
+
+  print_batch_answer
+
+  # A stream that ended without a result event did not finish
+  if [[ "$status" == "running" ]]; then
+    status="error"
+  fi
+
+  if [[ -n "$session_id" ]]; then
+    CONV_SESSION_ID="$session_id"
+    if [[ -s "$RAW_JSON" ]] && saved_file=$(save_session "$RAW_JSON" "$q" "$CONV_FILE"); then
+      CONV_FILE="$saved_file"
+      local fields=()
+      mapfile -t fields < <(jq -r '.turn_count, (.cost_usd // "")' "$CONV_FILE")
+      CONV_TURNS="${fields[0]:-1}"
+      CONV_COST="${fields[1]:-}"
+    fi
+  fi
+  if ((CONV_TURNS > 1)); then
+    format_cost total "$CONV_COST"
+    CONV_INFO="turn ${CONV_TURNS}${total:+ | $total total}"
+  fi
+  show_final_status_bar
+
+  # Report failures: claude's exit status, an error result, or no result
+  if [[ "$claude_status" -ne 0 || "$status" == "error" ]]; then
+    if [[ -n "$stream_error" ]]; then
+      printf 'claude-ask: %s\n' "$stream_error" >&2
+    elif [[ "$claude_status" -ne 0 ]]; then
+      printf 'claude-ask: %s exited with status %d\n' "$CLAUDE_BIN" "$claude_status" >&2
+    else
+      printf 'claude-ask: the response ended without a result\n' >&2
+    fi
+    if [[ -s "$CLAUDE_STDERR" ]]; then
+      sed 's/^/  /' "$CLAUDE_STDERR" >&2
+    fi
+    return 1
+  fi
+  return 0
+}
+
+# Continue the newest saved session: load it into the CONV_* state and show
+# where it left off (a header and the last turn)
+resume_newest() {
+  local file="" f fields=() total="" header
+  while IFS= read -r f; do
+    if [[ -n "$f" ]]; then
+      file="$f"
+      break
+    fi
+  done < <(ls -t "$SESSION_DIR"/*.json 2> /dev/null)
+  if [[ -z "$file" ]]; then
+    echo "claude-ask: no saved session to resume" >&2
+    return 1
+  fi
+
+  mapfile -d '' -t fields < <(jq -j "${SESSION_TURNS_JQ}"'
+    [(.session_id // ""), (turns_of | length), (.cost_usd // ""), (.cwd // "")]
+    | map(tostring + "\u0000") | add' "$file")
+  if [[ -z "${fields[0]:-}" ]]; then
+    echo "claude-ask: $(basename "$file" .json) has no session id and cannot be resumed" >&2
+    return 1
+  fi
+  CONV_FILE="$file"
+  CONV_SESSION_ID="${fields[0]}"
+  CONV_TURNS="${fields[1]:-1}"
+  CONV_COST="${fields[2]:-}"
+  debug_log "resuming $file: session_id=$CONV_SESSION_ID turns=$CONV_TURNS"
+
+  format_cost total "$CONV_COST"
+  header="resuming $(basename "$file" .json) (${CONV_TURNS} turn"
+  if ((CONV_TURNS != 1)); then header+="s"; fi
+  header+="${total:+, $total}"
+  header+=")${fields[3]:+ from ${fields[3]}}"
+  printf '%s%s%s\n\n' "$FG_DIM" "$header" "$RST"
+  show_turns "$file" last
+}
+
+# Open $EDITOR for a multi-line question; sets COMPOSED, returns 1 if empty
+compose_in_editor() {
+  local f="$RUN_DIR/question.md"
+  COMPOSED=""
+  : > "$f"
+  "${EDITOR:-vi}" "$f" || return 1
+  COMPOSED=$(< "$f")
+  [[ "$COMPOSED" =~ [^[:space:]] ]]
+}
+
+# The chat: read questions at a "> " prompt and ask each one in the same
+# conversation. Ctrl-D, exit or quit ends it; \e opens the editor.
+chat_loop() {
+  local line rc eof=0 trimmed
+  # \001 and \002 tell readline the color codes take no width
+  local prompt=$'\001'"${FG_CLAUDE}"$'\002''> '$'\001'"${RST}"$'\002'
+
+  mkdir -p "$STATE_DIR"
+  HISTFILE="$CHAT_HISTORY_FILE"
+  HISTSIZE=1000
+  HISTFILESIZE=1000
+  set -o history
+  if [[ -f "$HISTFILE" ]]; then history -r; fi
+
+  while ((!eof)); do
+    line=""
+    rc=0
+    TURN_INTERRUPTED=0
+    IFS= read -r -e -p "$prompt" line || rc=$?
+    if ((rc > 128 || TURN_INTERRUPTED)); then
+      # Ctrl-C at the prompt: drop the line, prompt again
+      printf '\n'
+      continue
+    fi
+    if ((rc != 0)); then
+      # End of input (Ctrl-D, or the last piped line without a newline)
+      eof=1
+      if [[ -z "$line" ]]; then
+        if [[ -t 0 ]]; then printf '\n'; fi
+        break
+      fi
+    fi
+
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    case "$trimmed" in
+      "") continue ;;
+      exit | quit) break ;;
+      '\e')
+        compose_in_editor || continue
+        line="$COMPOSED"
+        printf '%s%s%s\n' "$FG_DIM" "$line" "$RST"
+        ;;
+    esac
+
+    history -s "$line"
+    history -a 2> /dev/null || true
+
+    rc=0
+    ask_once "$line" || rc=$?
+    if ((rc != 130)); then LAST_TURN_STATUS=$rc; fi
+    printf '\n'
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Ask claude: an optional resume, the question, then the chat
 # ---------------------------------------------------------------------------
 require_cmds "$CLAUDE_BIN"
 mkdir -p "$SESSION_DIR"
 
 RAW_JSON="$RUN_DIR/stream.jsonl"
 CLAUDE_STDERR="$RUN_DIR/claude.stderr"
-: > "$RAW_JSON"
 
-reset_stream_state
-STREAM_START=$SECONDS
-
-if [[ "$USE_PAGER" -eq 1 && "$STREAM_OUTPUT" -eq 1 ]]; then
-  start_pager_pipe
+if [[ "$RESUME" -eq 1 ]]; then
+  resume_newest || exit 1
+  printf '\n'
 fi
 
-update_status_bar "${SPINNER[0]}" "connecting..." "" "" "" "" "running"
-
-# claude runs on its own fd so its exit status can be collected afterwards.
-# The question goes in on stdin, so one starting with "-" is never read as an
-# option (and it stays out of the process list).
-debug_log "starting main loop, streaming from $CLAUDE_BIN"
-exec {CLAUDE_FD}< <("$CLAUDE_BIN" --output-format stream-json --verbose -p <<< "$question" 2> "$CLAUDE_STDERR")
-CLAUDE_PID=$!
-
-while IFS= read -r line <&"$CLAUDE_FD"; do
-  printf '%s\n' "$line" >> "$RAW_JSON"
-  process_stream_line "$line" || continue
-  if [[ -n "$CHUNK" && "$STREAM_OUTPUT" -eq 1 ]]; then
-    write_chunk "$CHUNK"
-  fi
-  refresh_status_bar
-done
-
-exec {CLAUDE_FD}<&-
-claude_status=0
-wait "$CLAUDE_PID" || claude_status=$?
-CLAUDE_PID=""
-debug_log "claude exited: status=$claude_status stream_status=$status"
-
-stop_pager_pipe
-print_batch_answer
-
-# A stream that ended without a result event did not finish
-if [[ "$status" == "running" ]]; then
-  status="error"
-fi
-show_final_status_bar
-
-if [[ -n "$session_id" && -s "$RAW_JSON" ]]; then
-  save_session "$RAW_JSON" "$question" > /dev/null
+if [[ -n "$question" ]]; then
+  ask_once "$question" || LAST_TURN_STATUS=$?
 fi
 
-# ---------------------------------------------------------------------------
-# Report failures: claude's exit status, an error result, or no result
-# ---------------------------------------------------------------------------
-if [[ "$claude_status" -ne 0 || "$status" == "error" ]]; then
-  if [[ -n "$stream_error" ]]; then
-    printf 'claude-ask: %s\n' "$stream_error" >&2
-  elif [[ "$claude_status" -ne 0 ]]; then
-    printf 'claude-ask: %s exited with status %d\n' "$CLAUDE_BIN" "$claude_status" >&2
-  else
-    printf 'claude-ask: the response ended without a result\n' >&2
-  fi
-  if [[ -s "$CLAUDE_STDERR" ]]; then
-    sed 's/^/  /' "$CLAUDE_STDERR" >&2
-  fi
+if [[ "$INTERACTIVE" -eq 1 ]]; then
+  if [[ -n "$question" ]]; then printf '\n'; fi
+  chat_loop
+fi
+
+if [[ "$LAST_TURN_STATUS" -ne 0 ]]; then
   exit 1
 fi
+exit 0

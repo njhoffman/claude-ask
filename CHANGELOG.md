@@ -6,6 +6,38 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-31
+
+### Added
+
+- Chat mode: `-i` / `--interactive` keeps a `> ` prompt open after each
+  answer, and every question continues the same Claude conversation. It is
+  the default when no question is given and stdin is a terminal. `\e` at the
+  prompt opens `$EDITOR` for a longer question, `exit` / `quit` / Ctrl-D end
+  the chat, Ctrl-C stops the current answer without leaving, and the up arrow
+  recalls questions (kept in `~/.local/state/claude-ask/history`).
+- `-r` / `--resume` continues the most recent saved session: with a
+  question, asks it there; without, opens the chat there. It first shows a
+  header (turns, total cost, directory) and the last question and answer.
+- Piped input with no question is read as the question (`git diff |
+  claude-ask`).
+- Sessions record the directory they were started in (`cwd`).
+
+### Changed
+
+- With no question, `claude-ask` opens a chat instead of `$EDITOR`.
+- A session file now holds a whole conversation: a `turns` list, with the
+  first question, last answer and total cost, tokens and time at the top
+  level. `--history` shows the number of turns (`3T`) and `--session`
+  replays every turn. Files saved by earlier versions are read as one turn.
+- The status bar's info line shows the turn number and the conversation's
+  total cost from the second turn on.
+
+### Fixed
+
+- Sessions saved since Claude Code started emitting hook events before its
+  `init` event had `model: null`; the model is now taken from `init`.
+
 ## [0.3.1] - 2026-10-31
 
 ### Changed

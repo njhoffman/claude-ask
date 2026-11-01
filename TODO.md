@@ -112,3 +112,12 @@ Reviewed: 2026-10-31
   events). Run one long-lived `jq --unbuffered` over the whole stream (a
   coprocess fed each line, or reading claude's output directly and emitting the
   NUL-separated fields) and read its records instead of starting `jq` per line.
+- [ ] **Resume or chat in a chosen session, not only the newest.** (p3)
+  [feature] `-r` always takes the newest session file. Let `--session ID|N`
+  combine with `-r` or `-i` (or give `-r` an optional `ID|N`) to continue an
+  older conversation, reusing `view_session`'s lookup by index, name and prefix.
+- [ ] **The chat prompt cannot take a multi-line paste.** (p3) [feature]
+  Pasting several lines at the `> ` prompt sends each line as its own question.
+  Enable bracketed paste for the prompt's readline (`bind 'set
+  enable-bracketed-paste on'`) and check the pasted block arrives as one
+  question, or document `\e` for that.
