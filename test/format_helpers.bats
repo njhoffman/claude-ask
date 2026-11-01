@@ -12,42 +12,42 @@ setup() {
 # format_tokens
 # ---------------------------------------------------------------------------
 @test "format_tokens: empty input returns empty" {
-  result=$(format_tokens "")
+  format_tokens result ""
   [ -z "$result" ]
 }
 
 @test "format_tokens: zero returns empty" {
-  result=$(format_tokens "0")
+  format_tokens result "0"
   [ -z "$result" ]
 }
 
 @test "format_tokens: small number returns as-is" {
-  result=$(format_tokens "500")
+  format_tokens result "500"
   [ "$result" = "500" ]
 }
 
 @test "format_tokens: 999 returns as-is" {
-  result=$(format_tokens "999")
+  format_tokens result "999"
   [ "$result" = "999" ]
 }
 
 @test "format_tokens: 1000 formats as 1.0k" {
-  result=$(format_tokens "1000")
+  format_tokens result "1000"
   [ "$result" = "1.0k" ]
 }
 
 @test "format_tokens: 19900 formats as 19.9k" {
-  result=$(format_tokens "19900")
+  format_tokens result "19900"
   [ "$result" = "19.9k" ]
 }
 
 @test "format_tokens: 1000000 formats as 1.0M" {
-  result=$(format_tokens "1000000")
+  format_tokens result "1000000"
   [ "$result" = "1.0M" ]
 }
 
 @test "format_tokens: 2500000 formats as 2.5M" {
-  result=$(format_tokens "2500000")
+  format_tokens result "2500000"
   [ "$result" = "2.5M" ]
 }
 
@@ -55,32 +55,32 @@ setup() {
 # format_duration
 # ---------------------------------------------------------------------------
 @test "format_duration: empty input returns empty" {
-  result=$(format_duration "")
+  format_duration result ""
   [ -z "$result" ]
 }
 
 @test "format_duration: sub-second shows ms" {
-  result=$(format_duration "500")
+  format_duration result "500"
   [ "$result" = "500ms" ]
 }
 
 @test "format_duration: 1000ms formats as 1.0s" {
-  result=$(format_duration "1000")
+  format_duration result "1000"
   [ "$result" = "1.0s" ]
 }
 
 @test "format_duration: 7429ms formats as 7.4s" {
-  result=$(format_duration "7429")
+  format_duration result "7429"
   [ "$result" = "7.4s" ]
 }
 
 @test "format_duration: 60000ms formats as 1m0s" {
-  result=$(format_duration "60000")
+  format_duration result "60000"
   [ "$result" = "1m0s" ]
 }
 
 @test "format_duration: 90000ms formats as 1m30s" {
-  result=$(format_duration "90000")
+  format_duration result "90000"
   [ "$result" = "1m30s" ]
 }
 
@@ -88,22 +88,22 @@ setup() {
 # format_cost
 # ---------------------------------------------------------------------------
 @test "format_cost: empty input returns empty" {
-  result=$(format_cost "")
+  format_cost result ""
   [ -z "$result" ]
 }
 
 @test "format_cost: formats with 4 decimal places" {
-  result=$(format_cost "0.094995")
+  format_cost result "0.094995"
   [ "$result" = '$0.0950' ]
 }
 
 @test "format_cost: formats zero" {
-  result=$(format_cost "0")
+  format_cost result "0"
   [ "$result" = '$0.0000' ]
 }
 
 @test "format_cost: formats small cost" {
-  result=$(format_cost "0.001")
+  format_cost result "0.001"
   [ "$result" = '$0.0010' ]
 }
 
@@ -111,27 +111,27 @@ setup() {
 # format_count
 # ---------------------------------------------------------------------------
 @test "format_count: empty input returns 0" {
-  result=$(format_count "")
+  format_count result ""
   [ "$result" = "0" ]
 }
 
 @test "format_count: zero returns 0" {
-  result=$(format_count "0")
+  format_count result "0"
   [ "$result" = "0" ]
 }
 
 @test "format_count: small number returns as-is" {
-  result=$(format_count "42")
+  format_count result "42"
   [ "$result" = "42" ]
 }
 
 @test "format_count: 1500 formats as 1.5k" {
-  result=$(format_count "1500")
+  format_count result "1500"
   [ "$result" = "1.5k" ]
 }
 
 @test "format_count: 2500000 formats as 2.5M" {
-  result=$(format_count "2500000")
+  format_count result "2500000"
   [ "$result" = "2.5M" ]
 }
 
@@ -139,27 +139,27 @@ setup() {
 # format_elapsed
 # ---------------------------------------------------------------------------
 @test "format_elapsed: empty input returns 0s" {
-  result=$(format_elapsed "")
+  format_elapsed result ""
   [ "$result" = "0s" ]
 }
 
 @test "format_elapsed: zero returns 0s" {
-  result=$(format_elapsed "0")
+  format_elapsed result "0"
   [ "$result" = "0s" ]
 }
 
 @test "format_elapsed: seconds" {
-  result=$(format_elapsed "45")
+  format_elapsed result "45"
   [ "$result" = "45s" ]
 }
 
 @test "format_elapsed: minutes and seconds" {
-  result=$(format_elapsed "90")
+  format_elapsed result "90"
   [ "$result" = "1m30s" ]
 }
 
 @test "format_elapsed: hours and minutes" {
-  result=$(format_elapsed "3720")
+  format_elapsed result "3720"
   [ "$result" = "1h2m" ]
 }
 
@@ -167,29 +167,29 @@ setup() {
 # render_stream_info
 # ---------------------------------------------------------------------------
 @test "render_stream_info: shows lines and chars" {
-  result=$(render_stream_info "42" "1500" "12" "5" "running" "0")
+  render_stream_info result "42" "1500" "12" "5" "running" "0"
   [[ "$result" == *"42 lines"* ]]
   [[ "$result" == *"1.5k chars"* ]]
   [[ "$result" == *"12 chunks"* ]]
 }
 
 @test "render_stream_info: shows elapsed when running" {
-  result=$(render_stream_info "10" "500" "5" "30" "running" "0")
+  render_stream_info result "10" "500" "5" "30" "running" "0"
   [[ "$result" == *"30s"* ]]
 }
 
 @test "render_stream_info: omits elapsed when done" {
-  result=$(render_stream_info "10" "500" "5" "30" "done" "0")
+  render_stream_info result "10" "500" "5" "30" "done" "0"
   [[ "$result" != *"30s"* ]]
 }
 
 @test "render_stream_info: shows thinking indicator" {
-  result=$(render_stream_info "0" "0" "0" "3" "running" "1")
+  render_stream_info result "0" "0" "0" "3" "running" "1"
   [[ "$result" == *"thinking"* ]]
 }
 
 @test "render_stream_info: hides thinking when done" {
-  result=$(render_stream_info "10" "500" "5" "30" "done" "1")
+  render_stream_info result "10" "500" "5" "30" "done" "1"
   [[ "$result" != *"thinking"* ]]
 }
 

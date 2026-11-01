@@ -1,8 +1,9 @@
 # claude-ask
 
 Ask Claude a question from the terminal. `claude-ask` runs
-`claude -p --output-format stream-json`, streams the answer through a pager
-and pins a status bar (model, tokens, cost, time) to the top row.
+`claude -p --output-format stream-json` and streams the answer through a
+pager, with a status bar (model, tokens, cost, time) drawn just below the
+text as it arrives; the final bar stays under the answer.
 
 ```sh
 claude-ask "Explain git rebase"          # ask
@@ -14,7 +15,7 @@ claude-ask --version                     # print the version
 claude-ask --help                        # every option
 ```
 
-Needs `claude` (Claude Code), `jq`, `bc`, and a pager (`nvimpager` by
+Needs bash 5, `claude` (Claude Code), `jq`, and a pager (`nvimpager` by
 default; `--pager CMD`, run with `bash -c`, or `--no-pager` otherwise).
 Sessions are saved to `~/.local/share/claude/cli-sessions/` (`SESSION_DIR`
 overrides); `CLAUDE_ASK_BIN` names a different `claude` command. When

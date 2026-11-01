@@ -51,7 +51,7 @@ Reviewed: 2026-10-31
   answer under a "done" status bar and no message. Check for `claude`, `jq` and
   `bc` up front, capture stderr to the temp dir and print it on failure, and
   exit non-zero.
-- [ ] **Docs say the status bar is pinned to the top row.** (p3) [docs]
+- [x] **Docs say the status bar is pinned to the top row.** (p3) [docs]
   README, CLAUDE.md and the 0.1.0 CHANGELOG entry say so, but
   `update_status_bar` draws it below the streamed content.
 - [x] **Powerline separators assume every segment is present.** (p3) [bug]
@@ -65,7 +65,7 @@ Reviewed: 2026-10-31
   run single-object jq queries on them, giving one result per line (garbled
   line counts, an empty answer). Save raw as `.jsonl` alongside the parsed
   `.json`, or teach the readers to detect JSONL.
-- [ ] **A question with no ASCII letters saves an invisible session.** (p3)
+- [x] **A question with no ASCII letters saves an invisible session.** (p3)
   [bug] `slugify_question` returns an empty slug for e.g. a CJK-only question,
   so the file is `SESSION_DIR/.json`, which `ls *.json` in `--history` skips.
   Fall back to the session id or a timestamp when the slug is empty.
@@ -100,9 +100,15 @@ Reviewed: 2026-10-31
   [bug] `drain_bat` checks `read -t 0` and then does a blocking `read -r`, so
   when the pager has printed part of a line without its newline the status
   bar update waits for the rest. Read with a short timeout instead.
-- [ ] **Each status bar redraw forks a dozen processes.** (p3) [perf]
+- [x] **Each status bar redraw forks a dozen processes.** (p3) [perf]
   `refresh_status_bar` runs `format_tokens`, `format_cost` and
   `format_duration` in command substitutions (several calling `bc`), and
   `update_status_bar` renders the bar and the info line in two more; a
   `--demo-output` run with no delay still takes about 4s. Do the formatting
   with bash integer arithmetic and `printf -v` instead of `bc` and subshells.
+- [ ] **One `jq` process per stream event.** (p3) [perf] Since the status bar
+  redraw stopped forking, the per-event `jq` call in `process_stream_line` is
+  nearly all of the remaining time (about 16ms an event; 4.8s of 5.2s for 300
+  events). Run one long-lived `jq --unbuffered` over the whole stream (a
+  coprocess fed each line, or reading claude's output directly and emitting the
+  NUL-separated fields) and read its records instead of starting `jq` per line.

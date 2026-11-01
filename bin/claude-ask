@@ -37,8 +37,9 @@
 
 set -euo pipefail
 
-# Numbers are formatted with "." whatever the user's locale (bc prints "."
-# and printf would reject it under a comma-decimal LC_NUMERIC). LC_ALL would
+# Numbers are formatted with "." whatever the user's locale (the cost comes
+# from jq with a "." and printf would reject it under a comma-decimal
+# LC_NUMERIC; EPOCHREALTIME would use a ","). LC_ALL would
 # override LC_NUMERIC, so it moves to LANG, keeping the character encoding.
 if [[ -n "${LC_ALL:-}" ]]; then
   export LANG="$LC_ALL"
@@ -200,7 +201,7 @@ require_cmds() {
     exit 127
   fi
 }
-require_cmds jq bc
+require_cmds jq
 
 debug_log "args parsed: THEME=$THEME USE_PAGER=$USE_PAGER SAVE_RAW=$SAVE_RAW SHOW_HISTORY=$SHOW_HISTORY VIEW_SESSION=$VIEW_SESSION"
 
@@ -255,103 +256,111 @@ SEP_POWERLINE=$'\ue0b0'    #
 SPINNER=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
 
 # ---------------------------------------------------------------------------
-# Theme renderers
-# Each takes: spinner_char model tokens_in tokens_out cost duration status
+# Renderers and format helpers
+#
+# Each one writes its result into the variable named by its first argument,
+# like printf -v, instead of printing it: the status bar is redrawn on every
+# stream event, and calling these in $(...) cost a subshell (and often a bc)
+# per value. The output variable must not share a name with the function's
+# own locals, which would shadow it, so every local here starts with "_" and
+# output variable names must not.
 # ---------------------------------------------------------------------------
+
+# Theme renderers: OUT spinner_char model tokens_in tokens_out cost duration status
 render_minimal() {
-  local spin="$1" model="$2" tok_in="$3" tok_out="$4" cost="$5" dur="$6" status="$7"
-  local line=""
-  line+="${FG_CLAUDE}${spin}${RST} "
-  line+="${FG_MODEL}${model}${RST}"
-  if [[ -n "$tok_in" ]]; then
-    line+=" ${FG_DIM}|${RST} ${FG_TOKENS}in:${tok_in}${RST}"
+  local _out="$1" _spin="$2" _model="$3" _tok_in="$4" _tok_out="$5" _cost="$6" _dur="$7" _status="$8"
+  local _line=""
+  _line+="${FG_CLAUDE}${_spin}${RST} "
+  _line+="${FG_MODEL}${_model}${RST}"
+  if [[ -n "$_tok_in" ]]; then
+    _line+=" ${FG_DIM}|${RST} ${FG_TOKENS}in:${_tok_in}${RST}"
   fi
-  if [[ -n "$tok_out" ]]; then
-    line+=" ${FG_TOKENS}out:${tok_out}${RST}"
+  if [[ -n "$_tok_out" ]]; then
+    _line+=" ${FG_TOKENS}out:${_tok_out}${RST}"
   fi
-  if [[ -n "$cost" ]]; then
-    line+=" ${FG_DIM}|${RST} ${FG_COST}${cost}${RST}"
+  if [[ -n "$_cost" ]]; then
+    _line+=" ${FG_DIM}|${RST} ${FG_COST}${_cost}${RST}"
   fi
-  if [[ -n "$dur" ]]; then
-    line+=" ${FG_DIM}|${RST} ${FG_DURATION}${dur}${RST}"
+  if [[ -n "$_dur" ]]; then
+    _line+=" ${FG_DIM}|${RST} ${FG_DURATION}${_dur}${RST}"
   fi
-  if [[ "$status" == "done" ]]; then
-    line+=" ${FG_DIM}|${RST} ${FG_COST}done${RST}"
+  if [[ "$_status" == "done" ]]; then
+    _line+=" ${FG_DIM}|${RST} ${FG_COST}done${RST}"
   fi
-  printf '%s' "$line"
+  printf -v "$_out" '%s' "$_line"
 }
 
 render_bubbles() {
-  local spin="$1" model="$2" tok_in="$3" tok_out="$4" cost="$5" dur="$6" status="$7"
-  local line=""
+  local _out="$1" _spin="$2" _model="$3" _tok_in="$4" _tok_out="$5" _cost="$6" _dur="$7" _status="$8"
+  local _line=""
 
   # Claude bubble (spinner + model)
-  line+="${FG_CLAUDE}${SEP_BUBBLE_LEFT}${BG_CLAUDE} ${FG_CLAUDE}${spin} ${FG_MODEL}${model} ${RST}${FG_CLAUDE}${SEP_BUBBLE_RIGHT}${RST}"
+  _line+="${FG_CLAUDE}${SEP_BUBBLE_LEFT}${BG_CLAUDE} ${FG_CLAUDE}${_spin} ${FG_MODEL}${_model} ${RST}${FG_CLAUDE}${SEP_BUBBLE_RIGHT}${RST}"
 
   # Tokens bubble
-  if [[ -n "$tok_in" || -n "$tok_out" ]]; then
-    local tok_str=""
-    [[ -n "$tok_in" ]] && tok_str+="in:${tok_in}"
-    [[ -n "$tok_out" ]] && tok_str+=" out:${tok_out}"
-    line+=" ${FG_TOKENS}${SEP_BUBBLE_LEFT}${BG_TOKENS} ${FG_TOKENS}${tok_str} ${RST}${FG_TOKENS}${SEP_BUBBLE_RIGHT}${RST}"
+  if [[ -n "$_tok_in" || -n "$_tok_out" ]]; then
+    local _tok_str=""
+    [[ -n "$_tok_in" ]] && _tok_str+="in:${_tok_in}"
+    [[ -n "$_tok_out" ]] && _tok_str+=" out:${_tok_out}"
+    _line+=" ${FG_TOKENS}${SEP_BUBBLE_LEFT}${BG_TOKENS} ${FG_TOKENS}${_tok_str} ${RST}${FG_TOKENS}${SEP_BUBBLE_RIGHT}${RST}"
   fi
 
   # Cost bubble
-  if [[ -n "$cost" ]]; then
-    line+=" ${FG_COST}${SEP_BUBBLE_LEFT}${BG_COST} ${FG_COST}${cost} ${RST}${FG_COST}${SEP_BUBBLE_RIGHT}${RST}"
+  if [[ -n "$_cost" ]]; then
+    _line+=" ${FG_COST}${SEP_BUBBLE_LEFT}${BG_COST} ${FG_COST}${_cost} ${RST}${FG_COST}${SEP_BUBBLE_RIGHT}${RST}"
   fi
 
   # Duration bubble
-  if [[ -n "$dur" ]]; then
-    line+=" ${FG_DURATION}${SEP_BUBBLE_LEFT}${BG_DURATION} ${FG_DURATION}${dur} ${RST}${FG_DURATION}${SEP_BUBBLE_RIGHT}${RST}"
+  if [[ -n "$_dur" ]]; then
+    _line+=" ${FG_DURATION}${SEP_BUBBLE_LEFT}${BG_DURATION} ${FG_DURATION}${_dur} ${RST}${FG_DURATION}${SEP_BUBBLE_RIGHT}${RST}"
   fi
 
   # Status indicator
-  if [[ "$status" == "done" ]]; then
-    line+=" ${FG_COST}${SEP_BUBBLE_LEFT}${BG_COST} ${FG_COST}done ${RST}${FG_COST}${SEP_BUBBLE_RIGHT}${RST}"
+  if [[ "$_status" == "done" ]]; then
+    _line+=" ${FG_COST}${SEP_BUBBLE_LEFT}${BG_COST} ${FG_COST}done ${RST}${FG_COST}${SEP_BUBBLE_RIGHT}${RST}"
   fi
 
-  printf '%s' "$line"
+  printf -v "$_out" '%s' "$_line"
 }
 
 render_powerline() {
-  local spin="$1" model="$2" tok_in="$3" tok_out="$4" cost="$5" dur="$6" status="$7"
-  local line=""
+  local _out="$1" _spin="$2" _model="$3" _tok_in="$4" _tok_out="$5" _cost="$6" _dur="$7" _status="$8"
+  local _line=""
   # Each separator arrow takes the color of the segment before it
-  local prev_fg="${FG_CLAUDE}"
+  local _prev_fg="${FG_CLAUDE}"
 
   # Decorative start + claude segment
-  line+="${FG_CLAUDE}░▒▓${BG_CLAUDE} ${FG_CLAUDE}${spin} ${FG_MODEL}${model} ${RST}"
+  _line+="${FG_CLAUDE}░▒▓${BG_CLAUDE} ${FG_CLAUDE}${_spin} ${FG_MODEL}${_model} ${RST}"
 
   # Tokens segment
-  if [[ -n "$tok_in" || -n "$tok_out" ]]; then
-    local tok_str=""
-    [[ -n "$tok_in" ]] && tok_str+="in:${tok_in}"
-    [[ -n "$tok_out" ]] && tok_str+=" out:${tok_out}"
-    line+="${BG_TOKENS}${prev_fg}${SEP_POWERLINE}${RST}${BG_TOKENS} ${FG_TOKENS}${tok_str} ${RST}"
-    prev_fg="${FG_TOKENS}"
+  if [[ -n "$_tok_in" || -n "$_tok_out" ]]; then
+    local _tok_str=""
+    [[ -n "$_tok_in" ]] && _tok_str+="in:${_tok_in}"
+    [[ -n "$_tok_out" ]] && _tok_str+=" out:${_tok_out}"
+    _line+="${BG_TOKENS}${_prev_fg}${SEP_POWERLINE}${RST}${BG_TOKENS} ${FG_TOKENS}${_tok_str} ${RST}"
+    _prev_fg="${FG_TOKENS}"
   fi
 
   # Cost segment
-  if [[ -n "$cost" ]]; then
-    line+="${BG_COST}${prev_fg}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}${cost} ${RST}"
-    prev_fg="${FG_COST}"
+  if [[ -n "$_cost" ]]; then
+    _line+="${BG_COST}${_prev_fg}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}${_cost} ${RST}"
+    _prev_fg="${FG_COST}"
   fi
 
   # Duration segment
-  if [[ -n "$dur" ]]; then
-    line+="${BG_DURATION}${prev_fg}${SEP_POWERLINE}${RST}${BG_DURATION} ${FG_DURATION}${dur} ${RST}"
-    prev_fg="${FG_DURATION}"
+  if [[ -n "$_dur" ]]; then
+    _line+="${BG_DURATION}${_prev_fg}${SEP_POWERLINE}${RST}${BG_DURATION} ${FG_DURATION}${_dur} ${RST}"
+    _prev_fg="${FG_DURATION}"
   fi
 
   # Status / end cap
-  if [[ "$status" == "done" ]]; then
-    line+="${BG_COST}${prev_fg}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}done ${RST}${FG_COST}${SEP_POWERLINE}${RST}"
+  if [[ "$_status" == "done" ]]; then
+    _line+="${BG_COST}${_prev_fg}${SEP_POWERLINE}${RST}${BG_COST} ${FG_COST}done ${RST}${FG_COST}${SEP_POWERLINE}${RST}"
   else
-    line+="${prev_fg}${SEP_POWERLINE}${RST}"
+    _line+="${_prev_fg}${SEP_POWERLINE}${RST}"
   fi
 
-  printf '%s' "$line"
+  printf -v "$_out" '%s' "$_line"
 }
 
 render_status_bar() {
@@ -362,89 +371,95 @@ render_status_bar() {
   esac
 }
 
-# ---------------------------------------------------------------------------
-# Format helpers
-# ---------------------------------------------------------------------------
+# OUT N DIV: N / DIV with one decimal, truncated ("19.9" for 19900 / 1000),
+# in integer arithmetic; this is what bc with scale=1 used to produce
+_one_decimal() {
+  printf -v "$1" '%d.%d' "$(($2 / $3))" "$((($2 % $3) * 10 / $3))"
+}
+
+# OUT N: 950, 19.9k, 2.5M
+_format_magnitude() {
+  local _out="$1" _n="$2"
+  if ((_n >= 1000000)); then
+    _one_decimal "$_out" "$_n" 1000000
+    printf -v "$_out" '%sM' "${!_out}"
+  elif ((_n >= 1000)); then
+    _one_decimal "$_out" "$_n" 1000
+    printf -v "$_out" '%sk' "${!_out}"
+  else
+    printf -v "$_out" '%d' "$_n"
+  fi
+}
+
+# OUT N: a token count; empty for none or zero
 format_tokens() {
-  local n="$1"
-  if [[ -z "$n" || "$n" == "0" ]]; then
-    echo ""
-    return
-  fi
-  if [[ "$n" -ge 1000000 ]]; then
-    printf '%.1fM' "$(echo "scale=1; $n / 1000000" | bc)"
-  elif [[ "$n" -ge 1000 ]]; then
-    printf '%.1fk' "$(echo "scale=1; $n / 1000" | bc)"
+  if [[ -z "$2" || "$2" == "0" ]]; then
+    printf -v "$1" '%s' ""
   else
-    echo "$n"
+    _format_magnitude "$1" "$2"
   fi
 }
 
-format_duration() {
-  local ms="$1"
-  if [[ -z "$ms" ]]; then
-    echo ""
-    return
-  fi
-  if [[ "$ms" -ge 60000 ]]; then
-    printf '%dm%ds' "$((ms / 60000))" "$(((ms % 60000) / 1000))"
-  elif [[ "$ms" -ge 1000 ]]; then
-    printf '%.1fs' "$(echo "scale=1; $ms / 1000" | bc)"
-  else
-    printf '%dms' "$ms"
-  fi
-}
-
-format_cost() {
-  local c="$1"
-  if [[ -z "$c" ]]; then
-    echo ""
-    return
-  fi
-  printf '$%.4f' "$c"
-}
-
+# OUT N: a character count; 0 for none
 format_count() {
-  local n="$1"
-  [[ -z "$n" ]] && n=0
-  if [[ "$n" -ge 1000000 ]]; then
-    printf '%.1fM' "$(echo "scale=1; $n / 1000000" | bc)"
-  elif [[ "$n" -ge 1000 ]]; then
-    printf '%.1fk' "$(echo "scale=1; $n / 1000" | bc)"
+  _format_magnitude "$1" "${2:-0}"
+}
+
+# OUT MS: 500ms, 7.4s, 1m30s; empty for none
+format_duration() {
+  local _out="$1" _ms="$2"
+  if [[ -z "$_ms" ]]; then
+    printf -v "$_out" '%s' ""
+  elif ((_ms >= 60000)); then
+    printf -v "$_out" '%dm%ds' "$((_ms / 60000))" "$(((_ms % 60000) / 1000))"
+  elif ((_ms >= 1000)); then
+    _one_decimal "$_out" "$_ms" 1000
+    printf -v "$_out" '%ss' "${!_out}"
   else
-    echo "$n"
+    printf -v "$_out" '%dms' "$_ms"
   fi
 }
 
+# OUT USD: $0.0950; empty for none
+format_cost() {
+  if [[ -z "$2" ]]; then
+    printf -v "$1" '%s' ""
+  else
+    printf -v "$1" '$%.4f' "$2"
+  fi
+}
+
+# OUT SECONDS: 42s, 3m5s, 1h2m; 0s for none or negative
 format_elapsed() {
-  local secs="$1"
-  [[ -z "$secs" || "$secs" -le 0 ]] && {
-    echo "0s"
-    return
-  }
-  if [[ "$secs" -ge 3600 ]]; then
-    printf '%dh%dm' "$((secs / 3600))" "$(((secs % 3600) / 60))"
-  elif [[ "$secs" -ge 60 ]]; then
-    printf '%dm%ds' "$((secs / 60))" "$((secs % 60))"
+  local _out="$1" _secs="$2"
+  if [[ -z "$_secs" ]] || ((_secs <= 0)); then
+    printf -v "$_out" '0s'
+  elif ((_secs >= 3600)); then
+    printf -v "$_out" '%dh%dm' "$((_secs / 3600))" "$(((_secs % 3600) / 60))"
+  elif ((_secs >= 60)); then
+    printf -v "$_out" '%dm%ds' "$((_secs / 60))" "$((_secs % 60))"
   else
-    printf '%ds' "$secs"
+    printf -v "$_out" '%ds' "$_secs"
   fi
 }
 
+# OUT lines chars chunks elapsed status is_thinking: the line under the bar
 render_stream_info() {
-  local lines="$1" chars="$2" chunks="$3" elapsed="$4" is_done="$5" is_thinking="${6:-0}"
-  local info="  ${FG_DIM}"
-  if [[ "$is_thinking" -eq 1 && "$is_done" != "done" ]]; then
-    info+="thinking... ${FG_DIM}|${RST}${FG_DIM} "
+  local _out="$1" _lines="$2" _chars="$3" _chunks="$4" _elapsed="$5" _is_done="$6" _is_thinking="${7:-0}"
+  local _info="  ${FG_DIM}" _count_str _elapsed_str
+  if [[ "$_is_thinking" -eq 1 && "$_is_done" != "done" ]]; then
+    _info+="thinking... ${FG_DIM}|${RST}${FG_DIM} "
   fi
-  info+="${lines} lines ${FG_DIM}|${RST}${FG_DIM} "
-  info+="$(format_count "$chars") chars ${FG_DIM}|${RST}${FG_DIM} "
-  info+="${chunks} chunks"
-  if [[ "$is_done" != "done" && -n "$elapsed" ]]; then
-    info+=" ${FG_DIM}|${RST}${FG_DIM} $(format_elapsed "$elapsed")"
+  format_count _count_str "$_chars"
+  _info+="${_lines} lines ${FG_DIM}|${RST}${FG_DIM} "
+  _info+="${_count_str} chars ${FG_DIM}|${RST}${FG_DIM} "
+  _info+="${_chunks} chunks"
+  if [[ "$_is_done" != "done" && -n "$_elapsed" ]]; then
+    format_elapsed _elapsed_str "$_elapsed"
+    _info+=" ${FG_DIM}|${RST}${FG_DIM} ${_elapsed_str}"
   fi
-  info+="${RST}"
-  printf '%s' "$info"
+  _info+="${RST}"
+  printf -v "$_out" '%s' "$_info"
 }
 
 # ---------------------------------------------------------------------------
@@ -584,8 +599,20 @@ SESSION_JQ='
 # Save a raw stream-json file as a session in SESSION_DIR, plus a copy of the
 # raw stream as NAME.jsonl with --save-raw; prints the session file's path
 save_session() {
-  local raw="$1" question="$2" name file
-  name=$(unique_session_name "$(slugify_question "$question")" "$SESSION_DIR")
+  local raw="$1" question="$2" slug sid name file
+  slug=$(slugify_question "$question")
+  if [[ -z "$slug" ]]; then
+    # No ASCII letters or digits (e.g. a CJK-only question): name the session
+    # after its id, or the time, rather than saving a hidden ".json"
+    sid=$(jq -nR -r '[inputs | fromjson? | objects | select(.type == "system")]
+      | first | .session_id // empty' "$raw")
+    if [[ -n "$sid" ]]; then
+      slug="session-${sid:0:8}"
+    else
+      printf -v slug 'session-%(%Y%m%d-%H%M%S)T' -1
+    fi
+  fi
+  name=$(unique_session_name "$slug" "$SESSION_DIR")
   file="${SESSION_DIR}/${name}.json"
   debug_log "saving session: name=$name file=$file"
   # Lines that are not JSON objects are skipped rather than failing the save
@@ -608,6 +635,7 @@ run_theme_demo() {
   local sample_cost="\$0.0950"
   local sample_dur="7.4s"
 
+  local bar_text
   for theme in "${themes[@]}"; do
     echo "${BOLD}${theme}${RST}"
 
@@ -618,7 +646,8 @@ run_theme_demo() {
     for _ in {1..10}; do
       local s="${SPINNER[$idx]}"
       printf '\r  streaming: '
-      render_status_bar "$s" "$sample_model" "$sample_in" "$sample_out" "" "" "running"
+      render_status_bar bar_text "$s" "$sample_model" "$sample_in" "$sample_out" "" "" "running"
+      printf '%s' "$bar_text"
       idx=$(((idx + 1) % ${#SPINNER[@]}))
       sleep "${CLAUDE_ASK_DEMO_DELAY:-0.08}"
     done
@@ -626,7 +655,8 @@ run_theme_demo() {
 
     # Finished state
     printf '  finished:  '
-    render_status_bar "✓" "$sample_model" "$sample_in" "$sample_out" "$sample_cost" "$sample_dur" "done"
+    render_status_bar bar_text "✓" "$sample_model" "$sample_in" "$sample_out" "$sample_cost" "$sample_dur" "done"
+    printf '%s' "$bar_text"
     printf '\n\n'
   done
 }
@@ -1045,15 +1075,15 @@ view_session() {
   s_model=$(short_model_name "$s_model")
 
   # Format display values
-  local disp_in disp_out disp_cost disp_dur
-  disp_in=$(format_tokens "$s_input")
-  disp_out=$(format_tokens "$s_output")
-  disp_cost=$(format_cost "$s_cost")
-  disp_dur=$(format_duration "$s_dur")
+  local disp_in disp_out disp_cost disp_dur bar_text
+  format_tokens disp_in "$s_input"
+  format_tokens disp_out "$s_output"
+  format_cost disp_cost "$s_cost"
+  format_duration disp_dur "$s_dur"
 
   # Render status bar inline (not pinned to terminal row 1)
-  render_status_bar "✓" "$s_model" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "done"
-  printf '\n\n'
+  render_status_bar bar_text "✓" "$s_model" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "done"
+  printf '%s\n\n' "$bar_text"
 
   # Pipe answer through pager
   if [[ "$USE_PAGER" -eq 1 ]]; then
@@ -1102,28 +1132,28 @@ emit_text() {
   fi
 }
 
+# Arguments: those of render_status_bar, without OUT
 update_status_bar() {
-  local content info_content elapsed
-  content="$(render_status_bar "$@")"
-  elapsed=$((SECONDS - STREAM_START))
-  info_content="$(render_stream_info "$answer_lines" "$answer_chars" "$text_chunks" "$elapsed" "$status" "$is_thinking")"
+  local bar_text info_text
+  render_status_bar bar_text "$@"
+  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking"
   # Clear from cursor to end of screen (removes old status bar + info)
   printf '\e[J'
   # Move down 2 lines, print status bar, then info line below
-  printf '\n\n\e[2K%s\n\e[2K%s' "$content" "$info_content"
+  printf '\n\n\e[2K%s\n\e[2K%s' "$bar_text" "$info_text"
   # Move back up 3 lines (blank + status + info) and restore column
   printf '\e[3A\e[%dG' "$CURSOR_COL"
   STATUS_BAR_VISIBLE=1
 }
 
 finalize_status_bar() {
-  local content info_content
-  content="$(render_status_bar "$@")"
-  info_content="$(render_stream_info "$answer_lines" "$answer_chars" "$text_chunks" "" "done" "$is_thinking")"
+  local bar_text info_text
+  render_status_bar bar_text "$@"
+  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "" "done" "$is_thinking"
   # Clear from cursor to end of screen
   printf '\e[J'
   # Print final status bar + info line 2 lines below content
-  printf '\n\n%s\n%s\n' "$content" "$info_content"
+  printf '\n\n%s\n%s\n' "$bar_text" "$info_text"
   STATUS_BAR_VISIBLE=0
 }
 
@@ -1138,18 +1168,24 @@ refresh_status_bar() {
   # Drain any rendered output from the pager before updating the status bar
   drain_bat
 
-  update_status_bar "$spin_char" "${model:-...}" \
-    "$(format_tokens "$input_tokens")" "$(format_tokens "$output_tokens")" \
-    "$(format_cost "$cost")" "$(format_duration "$duration_ms")" "$status"
+  local disp_in disp_out disp_cost disp_dur
+  format_tokens disp_in "$input_tokens"
+  format_tokens disp_out "$output_tokens"
+  format_cost disp_cost "$cost"
+  format_duration disp_dur "$duration_ms"
+  update_status_bar "$spin_char" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
 }
 
 # The status bar left below the answer once the stream has ended
 show_final_status_bar() {
   local mark="✓"
   if [[ "$status" != "done" ]]; then mark="✗"; fi
-  finalize_status_bar "$mark" "${model:-...}" \
-    "$(format_tokens "$input_tokens")" "$(format_tokens "$output_tokens")" \
-    "$(format_cost "$cost")" "$(format_duration "$duration_ms")" "$status"
+  local disp_in disp_out disp_cost disp_dur
+  format_tokens disp_in "$input_tokens"
+  format_tokens disp_out "$output_tokens"
+  format_cost disp_cost "$cost"
+  format_duration disp_dur "$duration_ms"
+  finalize_status_bar "$mark" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
 }
 
 # In batch mode (--no-stream), render the complete answer once it is in

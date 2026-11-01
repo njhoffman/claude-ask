@@ -2,7 +2,8 @@
 
 claude-ask: one bash script, `bin/claude-ask`, an interactive wrapper around
 `claude --output-format stream-json --verbose -p` that streams the answer
-through a pager with a themed status bar pinned to the terminal's top row.
+through a pager with a themed status bar redrawn just below the streamed text
+(and left under the answer when it finishes).
 
 ## Commands
 
@@ -28,6 +29,9 @@ through a pager with a themed status bar pinned to the terminal's top row.
 - **Runtime files**: one private `mktemp -d` per run (under
   `$XDG_RUNTIME_DIR`) holds the pager FIFO, the raw stream and `claude`'s
   stderr; `cleanup` removes it.
+- **Renderers and format helpers** write into the variable named by their
+  first argument (like `printf -v`), so a redraw forks nothing; their locals
+  all start with `_`, so output variable names must not.
 - **Testability**: the functions are sourceable with `_CLAUDE_ASK_SOURCED=1`;
   everything the tests call is defined before that guard.
   `common_setup` in `test/test_helper.bash` isolates each test (temp

@@ -73,3 +73,30 @@ setup() {
   save_session "$FIXTURES_DIR/full_session.jsonl" "plain" > /dev/null
   [ ! -e "$SESSION_DIR/plain.jsonl" ]
 }
+
+@test "a question with no ASCII letters is named after the session id" {
+  local file
+  file=$(save_session "$FIXTURES_DIR/full_session.jsonl" "日本の首都は？")
+  [ "$file" = "$SESSION_DIR/session-full-ses.json" ]
+  [ "$(jq -r '.question' "$file")" = "日本の首都は？" ]
+}
+
+@test "a punctuation-only question is named after the session id" {
+  local file
+  file=$(save_session "$FIXTURES_DIR/full_session.jsonl" "???")
+  [ "$file" = "$SESSION_DIR/session-full-ses.json" ]
+}
+
+@test "without a session id the fallback name uses the time" {
+  local file
+  file=$(save_session "$FIXTURES_DIR/text_chunk.jsonl" "???")
+  [[ "$file" =~ /session-[0-9]{8}-[0-9]{6}\.json$ ]]
+}
+
+@test "a session saved under a fallback name shows in the history" {
+  save_session "$FIXTURES_DIR/full_session.jsonl" "日本の首都は？" > /dev/null
+  run show_history "$SESSION_DIR"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"session-full-ses"* ]]
+  [ -z "$(ls -A "$SESSION_DIR" | grep '^\.')" ]
+}

@@ -6,6 +6,23 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-31
+
+### Changed
+
+- Redrawing the status bar no longer starts any processes: the format helpers
+  use bash arithmetic instead of `bc` (same output), and nothing runs in a
+  subshell. A 300-event answer renders in about a third of the time; most of
+  what remains is the one `jq` call per event.
+- `bc` is no longer needed.
+
+### Fixed
+
+- A question with no ASCII letters or digits (e.g. Japanese only) is saved as
+  `session-<id>.json` instead of a hidden `.json` that `--history` never listed.
+- The README, CLAUDE.md and the 0.1.0 entry below said the status bar was
+  pinned to the top row; it is drawn below the streamed text.
+
 ## [0.3.0] - 2026-10-31
 
 ### Added
@@ -68,7 +85,7 @@ All notable changes to claude-ask are recorded here, in the
 
 - `claude-ask`, moved here from `~/.config/claude/scripts/`: asks Claude a
   question from the terminal (`claude -p` with stream-json), streams the answer
-  through a pager under a status bar pinned to the top row (themes `minimal`,
+  through a pager above a status bar drawn below the text (themes `minimal`,
   `bubbles`, `powerline`), saves sessions to
   `~/.local/share/claude/cli-sessions/` and replays them with `--history` /
   `--session`.
