@@ -6,6 +6,23 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-31
+
+### Changed
+
+- The default pager is `nvcat --pager less` instead of nvimpager with a
+  personal colorscheme. When the default pager is not installed, answers
+  print as plain text instead of disappearing.
+
+### Added
+
+- `CLAUDE_ASK_PAGER` sets the default pager command.
+
+### Fixed
+
+- The pager gets the terminal width (`COLUMNS`) while streaming; it writes
+  to a pipe there and fell back to 80 columns.
+
 ## [0.4.0] - 2026-10-31
 
 ### Added

@@ -15,7 +15,11 @@ through a pager with a themed status bar redrawn just below the streamed text
 
 - **Status bar themes**: `--theme minimal|bubbles|powerline` (catppuccin mocha
   palette, nerd font separators for bubbles/powerline).
-- **Pager**: `--pager CMD` (run with `bash -c`) or `--no-pager`.
+- **Pager**: default `nvcat --pager less` (`CLAUDE_ASK_PAGER` overrides; a
+  default that is not installed means plain text); `--pager CMD` (run with
+  `bash -c`) or `--no-pager`. `run_pager` passes `COLUMNS`, since a pager
+  writing to the streaming pipe cannot ask the terminal for its width.
+  Tests set `CLAUDE_ASK_PAGER=cat`.
 - **Sessions**: parsed JSON saved to
   `~/.local/share/claude/cli-sessions/{question-slug}.json`, plus the raw
   stream as `{question-slug}.jsonl` with `--save-raw`; `--history` lists

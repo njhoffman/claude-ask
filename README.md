@@ -19,8 +19,12 @@ claude-ask --version                     # print the version
 claude-ask --help                        # every option
 ```
 
-Needs bash 5, `claude` (Claude Code), `jq`, and a pager (`nvimpager` by
-default; `--pager CMD`, run with `bash -c`, or `--no-pager` otherwise).
+Needs bash 5, `claude` (Claude Code) and `jq`. Answers are rendered with
+`nvcat --pager less` (Neovim Markdown rendering, paged with `less` when
+printed straight to the terminal); without `nvcat` they print as plain text.
+`--pager CMD` (run with `bash -c`) or `CLAUDE_ASK_PAGER` picks another
+renderer, `--no-pager` none. In a shell from `~/.shell`, `ask` is an alias
+for `claude-ask`.
 Sessions are saved to `~/.local/share/claude/cli-sessions/` (`SESSION_DIR`
 overrides); `CLAUDE_ASK_BIN` names a different `claude` command. When
 `claude` fails, its error is printed and `claude-ask` exits non-zero.

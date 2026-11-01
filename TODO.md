@@ -17,7 +17,7 @@ Reviewed: 2026-10-31
   prefixes (`bin/claude-ask` around lines 127, 682, 1078, 1141), readable by
   other users and ignoring `$TMPDIR`. Use `${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}`
   and `mktemp -d` once per run.
-- [ ] **Default pager depends on a personal colorscheme.** (p3) [bug]
+- [x] **Default pager depends on a personal colorscheme.** (p3) [bug]
   `PAGER_CMD` runs `nvimpager` with `colorscheme nord-nick`; on a host without
   nvimpager or that colorscheme the answer does not render. Fall back to the
   commented-out `bat` command when `nvimpager` is missing, or make it a config

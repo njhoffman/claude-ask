@@ -15,7 +15,8 @@
 #   -r, --resume       Continue the most recent saved session (with a
 #                      question: ask it there; without: chat there)
 #   --theme THEME      Status bar theme: minimal, bubbles, powerline (default: minimal)
-#   --pager CMD        Pager command for markdown output, run with bash -c (default: nvimpager)
+#   --pager CMD        Pager command for markdown output, run with bash -c
+#                      (default: nvcat --pager less; plain text if nvcat is missing)
 #   --no-pager         Disable pager, output raw text
 #   --demo-themes       Show example status bars for all themes and exit
 #   --demo-output       Simulate streaming with mock responses (small/medium/large) and exit
@@ -46,6 +47,7 @@
 # Environment:
 #   SESSION_DIR        Where sessions are saved (default: ~/.local/share/claude/cli-sessions)
 #   CLAUDE_ASK_BIN     The claude command to run (default: claude)
+#   CLAUDE_ASK_PAGER   The default pager command (default: nvcat --pager less)
 #   CLAUDE_ASK_DEMO_DELAY  Seconds between demo frames (default: 0.08 themes, 0.03 output)
 #   CLAUDE_ASK_FORCE_INTERACTIVE  Chat even when stdin is not a terminal (tests)
 
@@ -65,8 +67,10 @@ export LC_NUMERIC=C
 # Defaults
 # ---------------------------------------------------------------------------
 THEME="minimal"
-# PAGER_CMD="bat --color=always -l markdown --paging=never --wrap=auto"
-PAGER_CMD='command nvimpager -c -- -c "colorscheme nord-nick | set termguicolors | set ft=markdown"'
+# nvcat renders Markdown with Neovim; it pages with less only when writing to
+# a terminal, so while streaming (output read back through a pipe) it prints
+PAGER_CMD="${CLAUDE_ASK_PAGER:-nvcat --pager less}"
+PAGER_IS_DEFAULT=1
 USE_PAGER=1
 STREAM_OUTPUT=1
 SAVE_RAW=0
@@ -134,6 +138,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       PAGER_CMD="$2"
+      PAGER_IS_DEFAULT=0
       shift 2
       ;;
     --no-pager)
@@ -228,6 +233,17 @@ require_cmds() {
   fi
 }
 require_cmds jq
+
+# A default pager that is not installed means plain text, not a failed run;
+# a --pager given on the command line is used as it is
+if [[ "$USE_PAGER" -eq 1 && "$PAGER_IS_DEFAULT" -eq 1 ]]; then
+  read -r pager_prog pager_rest <<< "$PAGER_CMD"
+  if [[ "$pager_prog" == "command" ]]; then read -r pager_prog _ <<< "$pager_rest"; fi
+  if ! command -v "$pager_prog" > /dev/null 2>&1; then
+    debug_log "default pager $pager_prog not found, printing plain text"
+    USE_PAGER=0
+  fi
+fi
 
 debug_log "args parsed: THEME=$THEME USE_PAGER=$USE_PAGER SAVE_RAW=$SAVE_RAW SHOW_HISTORY=$SHOW_HISTORY VIEW_SESSION=$VIEW_SESSION"
 
@@ -594,9 +610,20 @@ process_stream_line() {
   return 0
 }
 
-# Run the pager on stdin; bash -c so quotes inside PAGER_CMD are honored
+# Run the pager on stdin; bash -c so quotes inside PAGER_CMD are honored.
+# While streaming, the pager writes to a pipe, so it cannot ask the terminal
+# for its width: pass COLUMNS explicitly (bash may hold it as an unexported
+# shell variable; otherwise ask the terminal).
 run_pager() {
-  bash -c "$PAGER_CMD"
+  local cols="${COLUMNS:-}" size
+  if [[ -z "$cols" ]] && size=$(stty size < /dev/tty 2> /dev/null); then
+    cols="${size#* }"
+  fi
+  if [[ -n "$cols" ]]; then
+    COLUMNS="$cols" bash -c "$PAGER_CMD"
+  else
+    bash -c "$PAGER_CMD"
+  fi
 }
 
 # ---------------------------------------------------------------------------

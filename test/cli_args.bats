@@ -136,6 +136,45 @@ load test_helper
   [ "$output" = "claude-ask $(cat "$SCRIPT_DIR/VERSION")" ]
 }
 
+@test "default pager that is not installed falls back to plain text" {
+  export CLAUDE_ASK_PAGER="claude-ask-no-such-pager --pager less"
+  run "$SCRIPT_PATH" "test"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"The capital of France is **Paris**."* ]]
+}
+
+@test "CLAUDE_ASK_PAGER sets the default pager" {
+  export CLAUDE_ASK_PAGER="sed 's/^/>> /'"
+  run "$SCRIPT_PATH" "test"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *">> The capital of France"* ]]
+}
+
+@test "the pager gets the terminal width in COLUMNS while streaming" {
+  unset COLUMNS
+  run script -qec "stty cols 123 rows 40; '$SCRIPT_PATH' --pager 'echo cols=\$COLUMNS; cat > /dev/null' test < /dev/null" /dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cols=123"* ]]
+}
+
+@test "an exported COLUMNS is passed to the pager unchanged" {
+  export COLUMNS=77
+  run "$SCRIPT_PATH" --pager 'echo cols=$COLUMNS; cat > /dev/null' "test"
+  [[ "$output" == *"cols=77"* ]]
+}
+
+@test "the default nvcat pager renders the answer" {
+  command -v nvcat > /dev/null || skip "nvcat not installed"
+  unset CLAUDE_ASK_PAGER
+  export COLUMNS=80
+  run "$SCRIPT_PATH" "test"
+  [ "$status" -eq 0 ]
+  output_clean=$(echo "$output" | strip_ansi)
+  # Rendered: the ** markers are gone, the text is there
+  [[ "$output_clean" == *"Paris"* ]]
+  [[ "$output_clean" != *"**Paris**"* ]]
+}
+
 @test "leaves no runtime files behind" {
   run "$SCRIPT_PATH" "test" --no-pager
   [ "$status" -eq 0 ]

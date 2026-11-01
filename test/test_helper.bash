@@ -19,6 +19,8 @@ common_setup() {
   export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/full_session.jsonl"
   unset CLAUDE_STUB_STDERR CLAUDE_STUB_EXIT CLAUDE_STUB_ARGS CLAUDE_STUB_STDIN CLAUDE_STUB_DELAY
   unset CLAUDE_STUB_LOG CLAUDE_STUB_FAIL_CALL CLAUDE_ASK_FORCE_INTERACTIVE
+  # Tests use plain text unless they choose a pager
+  export CLAUDE_ASK_PAGER="cat"
   export CLAUDE_ASK_DEMO_DELAY=0
 }
 
