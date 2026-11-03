@@ -9,19 +9,19 @@ load test_helper
 @test "parses opus model from init message" {
   parsed=$(parse_fixture "init.jsonl")
   model=$(get_parsed "model" "$parsed")
-  [ "$model" = "opus" ]
+  [ "$model" = "opus 4.6" ]
 }
 
 @test "parses sonnet model from full session" {
   parsed=$(parse_fixture "full_session.jsonl")
   model=$(get_parsed "model" "$parsed")
-  [ "$model" = "sonnet" ]
+  [ "$model" = "sonnet 4.5" ]
 }
 
 @test "parses haiku model" {
   parsed=$(parse_fixture "haiku_session.jsonl")
   model=$(get_parsed "model" "$parsed")
-  [ "$model" = "haiku" ]
+  [ "$model" = "haiku 4.5" ]
 }
 
 @test "strips context window suffix from model name" {
@@ -181,8 +181,21 @@ load test_helper
 # ---------------------------------------------------------------------------
 # Model names
 # ---------------------------------------------------------------------------
-@test "short_model_name keeps unknown model ids without the bracket suffix" {
+@test "short_model_name gives the family and version" {
   source_claude_ask
-  [ "$(short_model_name "claude-fable-5-1[1m]")" = "claude-fable-5-1" ]
-  [ "$(short_model_name "claude-opus-4-6")" = "opus" ]
+  [ "$(short_model_name "claude-opus-5-5")" = "opus 5.5" ]
+  [ "$(short_model_name "claude-fable-5-1[1m]")" = "fable 5.1" ]
+  [ "$(short_model_name "claude-opus-4-6")" = "opus 4.6" ]
+  [ "$(short_model_name "claude-opus-4-20250514")" = "opus 4" ]
+  [ "$(short_model_name "claude-sonnet-4-5-20250929")" = "sonnet 4.5" ]
+  [ "$(short_model_name "claude-3-5-sonnet-20241022")" = "sonnet 3.5" ]
+  [ "$(short_model_name "claude-3-opus-20240229")" = "opus 3" ]
+  [ "$(short_model_name "us.anthropic.claude-haiku-5-5")" = "haiku 5.5" ]
+}
+
+@test "short_model_name falls back to the family, or the id without its suffix" {
+  source_claude_ask
+  [ "$(short_model_name "opus")" = "opus" ]
+  [ "$(short_model_name "anthropic.claude-sonnet-4-5-v1:0")" = "sonnet" ]
+  [ "$(short_model_name "some-other-model[1m]")" = "some-other-model" ]
 }

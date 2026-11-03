@@ -4,7 +4,7 @@ Open work on claude-ask. Every item carries a priority, `(p1)` high, `(p2)`
 normal or `(p3)` low, and a category: `[bug]`, `[feature]`, `[refactor]`,
 `[docs]`, `[test]`, `[chore]` or `[perf]`.
 
-Reviewed: 2026-10-31
+Reviewed: 2026-11-03
 
 ## 1. claude-ask
 

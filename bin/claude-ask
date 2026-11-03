@@ -6,14 +6,20 @@
 #
 # With no question (and a terminal on stdin) it opens a chat: each answer is
 # followed by a "> " prompt for the next question in the same conversation.
-# At the prompt, \e composes the question in $EDITOR; exit, quit or Ctrl-D
-# ends the chat; Ctrl-C stops the current answer. Piped input with no
-# question is read as one question.
+# At the prompt, \e composes the question in $EDITOR; /effort [LEVEL] and
+# /model [NAME] show or change the effort level and model for the next
+# questions ("default" clears them); exit, quit or Ctrl-D ends the chat;
+# Ctrl-C stops the current answer. Piped input with no question is read as
+# one question.
 #
 # Options:
 #   -i, --interactive  Keep the chat open after answering the question
 #   -r, --resume       Continue the most recent saved session (with a
-#                      question: ask it there; without: chat there)
+#                      question: ask it there; without: chat there); it keeps
+#                      the session's effort and model unless -e or -m is given
+#   -e, --effort LEVEL Effort (thinking) level: low, medium, high, xhigh, max
+#                      (default: claude's own, from its settings)
+#   -m, --model MODEL  Model alias (opus, sonnet, haiku, fable) or full name
 #   --theme THEME      Status bar theme: minimal, bubbles, powerline (default: minimal)
 #   --pager CMD        Pager command for markdown output, run with bash -c
 #                      (default: nvcat --pager less; plain text if nvcat is missing)
@@ -35,6 +41,7 @@
 #   claude-ask -i "Explain git rebase"            # answer, then keep chatting
 #   claude-ask -r "And with --onto?"              # follow up in the last session
 #   claude-ask -r                                 # continue the last session as a chat
+#   claude-ask -e high -m sonnet "Review this design"
 #   git diff | claude-ask                         # piped input is the question
 #   claude-ask --theme powerline "Explain git rebase"
 #   claude-ask --demo-themes
@@ -48,6 +55,8 @@
 #   SESSION_DIR        Where sessions are saved (default: ~/.local/share/claude/cli-sessions)
 #   CLAUDE_ASK_BIN     The claude command to run (default: claude)
 #   CLAUDE_ASK_PAGER   The default pager command (default: nvcat --pager less)
+#   CLAUDE_ASK_EFFORT  The default effort level (-e overrides it)
+#   CLAUDE_ASK_MODEL   The default model (-m overrides it)
 #   CLAUDE_ASK_DEMO_DELAY  Seconds between demo frames (default: 0.08 themes, 0.03 output)
 #   CLAUDE_ASK_FORCE_INTERACTIVE  Chat even when stdin is not a terminal (tests)
 
@@ -87,6 +96,12 @@ CHAT_HISTORY_FILE="$STATE_DIR/history"
 MAX_DISPLAY_NAME=20
 SESSION_DIR="${SESSION_DIR:-$HOME/.local/share/claude/cli-sessions}"
 CLAUDE_BIN="${CLAUDE_ASK_BIN:-claude}"
+# Passed to claude as --effort and --model; empty means claude's own default.
+# The stream never says which effort claude used, so only one set here is shown.
+EFFORT="${CLAUDE_ASK_EFFORT:-}"
+MODEL="${CLAUDE_ASK_MODEL:-}"
+EFFORT_RE='^(low|medium|high|xhigh|max)$'
+EFFORT_LEVELS="low, medium, high, xhigh, max"
 
 # ---------------------------------------------------------------------------
 # Debug logging (must be defined before arg parsing)
@@ -130,6 +145,22 @@ while [[ $# -gt 0 ]]; do
         echo "Error: --theme must be one of: minimal, bubbles, powerline" >&2
         exit 1
       fi
+      shift 2
+      ;;
+    -e | --effort)
+      [[ $# -lt 2 ]] && {
+        echo "Error: $1 requires an argument" >&2
+        exit 1
+      }
+      EFFORT="$2"
+      shift 2
+      ;;
+    -m | --model)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "Error: $1 requires an argument" >&2
+        exit 1
+      fi
+      MODEL="$2"
       shift 2
       ;;
     --pager)
@@ -221,6 +252,12 @@ if [[ -n "$DEBUG_LOG" ]]; then
   mkdir -p "$(dirname "$DEBUG_LOG")"
 fi
 
+# Checked after parsing so a bad CLAUDE_ASK_EFFORT is caught too
+if [[ -n "$EFFORT" && ! "$EFFORT" =~ $EFFORT_RE ]]; then
+  echo "Error: effort must be one of: $EFFORT_LEVELS" >&2
+  exit 1
+fi
+
 # Fail early, with a clear message, when a required command is missing
 require_cmds() {
   local cmd missing=()
@@ -245,7 +282,7 @@ if [[ "$USE_PAGER" -eq 1 && "$PAGER_IS_DEFAULT" -eq 1 ]]; then
   fi
 fi
 
-debug_log "args parsed: THEME=$THEME USE_PAGER=$USE_PAGER SAVE_RAW=$SAVE_RAW SHOW_HISTORY=$SHOW_HISTORY VIEW_SESSION=$VIEW_SESSION"
+debug_log "args parsed: EFFORT=${EFFORT:-default} MODEL=${MODEL:-default} THEME=$THEME USE_PAGER=$USE_PAGER SAVE_RAW=$SAVE_RAW SHOW_HISTORY=$SHOW_HISTORY VIEW_SESSION=$VIEW_SESSION"
 
 question="${POSITIONAL[*]:-}"
 
@@ -277,7 +314,8 @@ BOLD=$'\e[1m'
 FG_CLAUDE=$'\e[38;2;217;119;87m' # #D97757
 BG_CLAUDE=$'\e[48;2;49;50;68m'   # #313244
 
-FG_MODEL=$'\e[38;2;116;199;236m' # #74c7ec
+FG_MODEL=$'\e[38;2;116;199;236m'  # #74c7ec
+FG_EFFORT=$'\e[38;2;203;166;247m' # #cba6f7 mauve
 
 FG_COST=$'\e[38;2;166;227;161m' # #a6e3a1
 BG_COST=$'\e[48;2;69;71;90m'    # #45475a
@@ -407,6 +445,17 @@ render_powerline() {
   printf -v "$_out" '%s' "$_line"
 }
 
+# OUT MODEL EFFORT: the model segment's text, "opus 5.5 · high" (just the
+# model when EFFORT is empty). Only foreground colors, so it sits inside any
+# theme's segment background.
+model_label() {
+  local _out="$1" _label="$2"
+  if [[ -n "${3:-}" ]]; then
+    _label+=" ${FG_DIM}·${FG_EFFORT} $3"
+  fi
+  printf -v "$_out" '%s' "$_label"
+}
+
 render_status_bar() {
   case "$THEME" in
     minimal) render_minimal "$@" ;;
@@ -514,10 +563,23 @@ render_stream_info() {
 # Stream parsing, shared by the main loop, --demo-output and the tests
 # ---------------------------------------------------------------------------
 
-# Shorten a model id such as "claude-opus-4-6[1m]" to "opus"
+# Shorten a model id to family and version: "claude-opus-4-6[1m]" is
+# "opus 4.6", "claude-3-5-sonnet-20241022" is "sonnet 3.5" and
+# "claude-opus-4-20250514" is "opus 4". Other ids naming a known family are
+# shortened to the family; anything else is kept, without a "[...]" suffix.
 short_model_name() {
-  local m="${1%%\[*}"
-  case "${m,,}" in
+  local m="${1%%\[*}" id
+  id="${m,,}"
+  if [[ "$id" == *claude-* ]]; then id="claude-${id#*claude-}"; fi
+  if [[ "$id" =~ ^claude-([a-z]+)-([0-9]+)(-([0-9]{1,2}))?(-[0-9]{8})?$ ]]; then
+    printf '%s %s%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[4]:+.${BASH_REMATCH[4]}}"
+    return
+  fi
+  if [[ "$id" =~ ^claude-([0-9]+)(-([0-9]{1,2}))?-([a-z]+)(-[0-9]{8})?$ ]]; then
+    printf '%s %s%s' "${BASH_REMATCH[4]}" "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]:+.${BASH_REMATCH[3]}}"
+    return
+  fi
+  case "$id" in
     *haiku*) m="haiku" ;;
     *sonnet*) m="sonnet" ;;
     *opus*) m="opus" ;;
@@ -655,6 +717,9 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
   | ($prev | first) as $p
   | {
       question: $question,
+      model: ($init.model // null),
+      model_option: (if $model_option == "" then null else $model_option end),
+      effort: (if $effort == "" then null else $effort end),
       answer: ($res.result // null),
       is_error: ($res.is_error // false),
       thinking: ([$events[] | select(.type == "assistant") | .message.content[]?
@@ -675,6 +740,7 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
   | {
       session_id: ($init.session_id // $sys.session_id // $p.session_id // null),
       model: ($init.model // $p.model // null),
+      effort: ($turns | last | .effort),
       name: $name,
       cwd: ($p.cwd // $init.cwd // null),
       question: $turns[0].question,
@@ -716,6 +782,8 @@ new_session_name() {
 # save_session RAW QUESTION [FILE]: add the turn in RAW to FILE (an existing
 # session), or to a new session file named after QUESTION. With --save-raw
 # the raw stream is also appended to NAME.jsonl. Prints the file's path.
+# The turn records EFFORT and MODEL (the -e and -m it was asked with) as
+# effort and model_option, and the model claude reported as model.
 save_session() {
   local raw="$1" question="$2" file="${3:-}" name prev tmp
   if [[ -n "$file" && -f "$file" ]]; then
@@ -730,6 +798,7 @@ save_session() {
   # Written beside the target and moved, so a failed save leaves the old file
   tmp="${file}.tmp.$$"
   if jq -nR --arg question "$question" --arg name "$name" --slurpfile prev "$prev" \
+    --arg effort "${EFFORT:-}" --arg model_option "${MODEL:-}" \
     "$SESSION_JQ" "$raw" > "$tmp"; then
     mv -f "$tmp" "$file"
   else
@@ -747,7 +816,8 @@ save_session() {
 # ---------------------------------------------------------------------------
 run_theme_demo() {
   local themes=("minimal" "bubbles" "powerline")
-  local sample_model="opus"
+  local sample_model
+  model_label sample_model "opus 5.5" "high"
   local sample_in="19.9k"
   local sample_out="275"
   local sample_cost="\$0.0950"
@@ -1197,22 +1267,23 @@ view_session() {
 # show_turns FILE all|last: replay a session's turns (question, status bar,
 # answer through the pager)
 show_turns() {
-  local file="$1" which="$2" model fields=() i
-  model=$(jq -r '.model // "unknown"' "$file")
-  model=$(short_model_name "$model")
-  # Seven NUL-terminated fields per turn
+  local file="$1" which="$2" fields=() i label
+  # Nine NUL-terminated fields per turn: the turn's model (the session's for
+  # turns saved before turns had one), its effort, then what show_turn takes
   mapfile -d '' -t fields < <(jq -j --arg which "$which" "${SESSION_TURNS_JQ}"'
-    turns_of | (if $which == "last" then [last] else . end)[]
-    | [.question, .answer, (.is_error // false), .cost_usd, .duration_ms,
-       .usage.input_tokens, .usage.output_tokens]
+    (.model // "unknown") as $model
+    | turns_of | (if $which == "last" then [last] else . end)[]
+    | [(.model // $model), .effort, .question, .answer, (.is_error // false),
+       .cost_usd, .duration_ms, .usage.input_tokens, .usage.output_tokens]
     | map((. // "" | tostring) + "\u0000") | add' "$file")
-  for ((i = 0; i + 6 < ${#fields[@]}; i += 7)); do
+  for ((i = 0; i + 8 < ${#fields[@]}; i += 9)); do
     if ((i > 0)); then printf '\n'; fi
-    show_turn "$model" "${fields[@]:i:7}"
+    model_label label "$(short_model_name "${fields[i]}")" "${fields[i + 1]}"
+    show_turn "$label" "${fields[@]:i+2:7}"
   done
 }
 
-# show_turn MODEL QUESTION ANSWER IS_ERROR COST DURATION_MS IN OUT
+# show_turn MODEL_LABEL QUESTION ANSWER IS_ERROR COST DURATION_MS IN OUT
 show_turn() {
   local model="$1" q="$2" answer="$3" is_error="$4"
   local disp_in disp_out disp_cost disp_dur bar_text mark="✓" state="done"
@@ -1313,24 +1384,26 @@ refresh_status_bar() {
   # Drain any rendered output from the pager before updating the status bar
   drain_bat
 
-  local disp_in disp_out disp_cost disp_dur
+  local disp_in disp_out disp_cost disp_dur label
   format_tokens disp_in "$input_tokens"
   format_tokens disp_out "$output_tokens"
   format_cost disp_cost "$cost"
   format_duration disp_dur "$duration_ms"
-  update_status_bar "$spin_char" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
+  model_label label "${model:-...}" "$EFFORT"
+  update_status_bar "$spin_char" "$label" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
 }
 
 # The status bar left below the answer once the stream has ended
 show_final_status_bar() {
   local mark="✓"
   if [[ "$status" != "done" ]]; then mark="✗"; fi
-  local disp_in disp_out disp_cost disp_dur
+  local disp_in disp_out disp_cost disp_dur label
   format_tokens disp_in "$input_tokens"
   format_tokens disp_out "$output_tokens"
   format_cost disp_cost "$cost"
   format_duration disp_dur "$duration_ms"
-  finalize_status_bar "$mark" "${model:-...}" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
+  model_label label "${model:-...}" "$EFFORT"
+  finalize_status_bar "$mark" "$label" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
 }
 
 # In batch mode (--no-stream), render the complete answer once it is in
@@ -1483,6 +1556,8 @@ ask_once() {
   if [[ -n "$CONV_SESSION_ID" ]]; then
     claude_args+=(--resume "$CONV_SESSION_ID")
   fi
+  if [[ -n "$EFFORT" ]]; then claude_args+=(--effort "$EFFORT"); fi
+  if [[ -n "$MODEL" ]]; then claude_args+=(--model "$MODEL"); fi
 
   : > "$RAW_JSON"
   : > "$CLAUDE_STDERR"
@@ -1501,7 +1576,7 @@ ask_once() {
   # claude runs on its own fd so its exit status can be collected afterwards.
   # The question goes in on stdin, so one starting with "-" is never read as
   # an option (and it stays out of the process list).
-  debug_log "asking: resume=${CONV_SESSION_ID:-none} question_len=${#q}"
+  debug_log "asking: resume=${CONV_SESSION_ID:-none} effort=${EFFORT:-default} model=${MODEL:-default} question_len=${#q}"
   exec {CLAUDE_FD}< <("$CLAUDE_BIN" "${claude_args[@]}" <<< "$q" 2> "$CLAUDE_STDERR")
   CLAUDE_PID=$!
 
@@ -1587,7 +1662,9 @@ resume_newest() {
   fi
 
   mapfile -d '' -t fields < <(jq -j "${SESSION_TURNS_JQ}"'
-    [(.session_id // ""), (turns_of | length), (.cost_usd // ""), (.cwd // "")]
+    (turns_of | last) as $last
+    | [(.session_id // ""), (turns_of | length), (.cost_usd // ""), (.cwd // ""),
+       ($last.effort // ""), ($last.model_option // "")]
     | map(tostring + "\u0000") | add' "$file")
   if [[ -z "${fields[0]:-}" ]]; then
     echo "claude-ask: $(basename "$file" .json) has no session id and cannot be resumed" >&2
@@ -1597,7 +1674,10 @@ resume_newest() {
   CONV_SESSION_ID="${fields[0]}"
   CONV_TURNS="${fields[1]:-1}"
   CONV_COST="${fields[2]:-}"
-  debug_log "resuming $file: session_id=$CONV_SESSION_ID turns=$CONV_TURNS"
+  # -e, -m and the environment win over what the session was last asked with
+  if [[ -z "$EFFORT" ]]; then EFFORT="${fields[4]:-}"; fi
+  if [[ -z "$MODEL" ]]; then MODEL="${fields[5]:-}"; fi
+  debug_log "resuming $file: session_id=$CONV_SESSION_ID turns=$CONV_TURNS effort=${EFFORT:-default} model=${MODEL:-default}"
 
   format_cost total "$CONV_COST"
   header="resuming $(basename "$file" .json) (${CONV_TURNS} turn"
@@ -1618,8 +1698,102 @@ compose_in_editor() {
   [[ "$COMPOSED" =~ [^[:space:]] ]]
 }
 
+# A dim note at the chat prompt
+chat_note() {
+  printf '%s%s%s\n' "$FG_DIM" "$*" "$RST"
+}
+
+chat_help() {
+  chat_note "/help              this list
+/effort [LEVEL]    show or set the effort: $EFFORT_LEVELS, or default
+/model [NAME]      show or set the model (opus, sonnet, haiku, fable, a full
+                   name), or default
+/theme [NAME]      show or set the status bar theme: minimal, bubbles, powerline
+/status            the conversation, model, effort and theme
+/new               start a new conversation
+/editor, \\e        compose the question in \$EDITOR
+/exit, /quit       end the chat (also exit, quit, Ctrl-D)
+Effort and model apply from the next question on."
+}
+
+chat_status() {
+  local total="" conv="new conversation"
+  if [[ -n "$CONV_FILE" ]]; then
+    format_cost total "$CONV_COST"
+    conv="$(basename "$CONV_FILE" .json) ($CONV_TURNS turn"
+    if ((CONV_TURNS != 1)); then conv+="s"; fi
+    conv+="${total:+, $total})"
+  fi
+  chat_note "session: $conv
+model:   ${MODEL:-default}${model:+ (last answer: $model)}
+effort:  ${EFFORT:-default}
+theme:   $THEME"
+}
+
+# chat_command LINE: run a slash command typed at the chat prompt. Returns 0
+# when LINE was a command, 1 when it is a question (not a "/word" first, so
+# "/etc/hosts: what is this?" is still asked), 2 for /exit and /quit.
+chat_command() {
+  local cmd="${1%%[[:space:]]*}" arg=""
+  [[ "$cmd" =~ ^/[a-z]+$ ]] || return 1
+  arg="${1#"$cmd"}"
+  arg="${arg#"${arg%%[![:space:]]*}"}"
+  case "$cmd" in
+    /help) chat_help ;;
+    /exit | /quit) return 2 ;;
+    /effort)
+      if [[ -z "$arg" ]]; then
+        chat_note "effort: ${EFFORT:-default}"
+      elif [[ "$arg" == default ]]; then
+        EFFORT=""
+        chat_note "effort: default"
+      elif [[ "$arg" =~ $EFFORT_RE ]]; then
+        EFFORT="$arg"
+        chat_note "effort: $EFFORT"
+      else
+        echo "claude-ask: effort must be one of: $EFFORT_LEVELS, or default" >&2
+      fi
+      ;;
+    /model)
+      if [[ -z "$arg" ]]; then
+        chat_note "model: ${MODEL:-default}${model:+ (last answer: $model)}"
+      elif [[ "$arg" =~ [[:space:]] ]]; then
+        echo "claude-ask: a model name has no spaces" >&2
+      elif [[ "$arg" == default ]]; then
+        MODEL=""
+        chat_note "model: default"
+      else
+        MODEL="$arg"
+        chat_note "model: $MODEL"
+      fi
+      ;;
+    /theme)
+      if [[ -z "$arg" ]]; then
+        chat_note "theme: $THEME"
+      elif [[ "$arg" =~ ^(minimal|bubbles|powerline)$ ]]; then
+        THEME="$arg"
+        chat_note "theme: $THEME"
+      else
+        echo "claude-ask: theme must be one of: minimal, bubbles, powerline" >&2
+      fi
+      ;;
+    /status) chat_status ;;
+    /new)
+      CONV_FILE=""
+      CONV_SESSION_ID=""
+      CONV_TURNS=0
+      CONV_COST=""
+      CONV_INFO=""
+      chat_note "new conversation"
+      ;;
+    *) echo "claude-ask: unknown command $cmd (/help lists them)" >&2 ;;
+  esac
+  return 0
+}
+
 # The chat: read questions at a "> " prompt and ask each one in the same
-# conversation. Ctrl-D, exit or quit ends it; \e opens the editor.
+# conversation. Ctrl-D, exit or quit ends it; \e opens the editor; lines
+# starting with a /command go to chat_command.
 chat_loop() {
   local line rc eof=0 trimmed
   # \001 and \002 tell readline the color codes take no width
@@ -1632,6 +1806,7 @@ chat_loop() {
   set -o history
   if [[ -f "$HISTFILE" ]]; then history -r; fi
 
+  chat_note "/help for commands"
   while ((!eof)); do
     line=""
     rc=0
@@ -1656,10 +1831,20 @@ chat_loop() {
     case "$trimmed" in
       "") continue ;;
       exit | quit) break ;;
-      '\e')
+      '\e' | /editor)
         compose_in_editor || continue
         line="$COMPOSED"
         printf '%s%s%s\n' "$FG_DIM" "$line" "$RST"
+        ;;
+      /*)
+        rc=0
+        chat_command "$trimmed" || rc=$?
+        if ((rc == 2)); then break; fi
+        if ((rc == 0)); then
+          history -s "$trimmed"
+          history -a 2> /dev/null || true
+          continue
+        fi
         ;;
     esac
 

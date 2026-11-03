@@ -6,6 +6,28 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-03
+
+### Added
+
+- `-e` / `--effort LEVEL` sets the effort (thinking) level (`low`,
+  `medium`, `high`, `xhigh`, `max`) and `-m` / `--model MODEL` the model;
+  `CLAUDE_ASK_EFFORT` and `CLAUDE_ASK_MODEL` set their defaults. The status
+  bar shows the effort after the model, e.g. `opus 5.5 · high`.
+- Chat commands: `/help`, `/effort [LEVEL]`, `/model [NAME]`, `/theme
+  [NAME]`, `/status`, `/new` (start a new conversation), `/editor` (same as
+  `\e`), and `/exit` / `/quit`. An unknown `/word` is refused instead of
+  being sent to Claude. The chat opens with a `/help for commands` hint.
+- Session files record each turn's model, effort and `-m` option;
+  `--session` shows them per turn, and `-r` keeps the session's effort and
+  model unless `-e` or `-m` is given.
+
+### Changed
+
+- The status bar shows the model's version: `opus 5.5`, `sonnet 4.5`,
+  `sonnet 3.5`, instead of just `opus` or `sonnet`. Other families, such as
+  `fable 5.1`, are shortened the same way.
+
 ## [0.4.1] - 2026-10-31
 
 ### Changed

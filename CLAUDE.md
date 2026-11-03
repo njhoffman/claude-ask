@@ -32,6 +32,15 @@ through a pager with a themed status bar redrawn just below the streamed text
   conversation (session file, claude session id for `--resume`, turns, total
   cost). `-r` loads the newest session file. No question + a terminal on
   stdin means chat; `CLAUDE_ASK_FORCE_INTERACTIVE` lets tests chat over a pipe.
+  `chat_command` runs the `/word` commands (`/help`, `/effort`, `/model`,
+  `/theme`, `/status`, `/new`, `/exit`); a first word that is not `/[a-z]+`
+  is a question.
+- **Effort and model**: `EFFORT` and `MODEL` (`-e`, `-m`, `CLAUDE_ASK_EFFORT`,
+  `CLAUDE_ASK_MODEL`, `/effort`, `/model`; empty means claude's default) are
+  passed as `--effort` and `--model` on every turn. The stream never reports
+  the effort, so the status bar (`model_label`) shows only one set here.
+  Each turn saves `model` (from `init`), `effort` and `model_option`; `-r`
+  restores the last two when not given.
 - **Session files**: one per conversation; `turns` plus top-level first
   question, last answer and totals (`SESSION_JQ`). Files from before turns are
   read as one turn (`SESSION_TURNS_JQ`'s `turns_of`). Model and cwd come from

@@ -96,7 +96,7 @@ setup() {
   generate_mock_stream small 0 > "$fixture"
   feed_stream "$fixture"
 
-  [ "$model" = "opus" ]
+  [ "$model" = "opus 4.6" ]
   [ "$session_id" = "demo-small" ]
   [ "$status" = "done" ]
   [[ "$answer_text" == *"Paris"* ]]
