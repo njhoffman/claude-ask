@@ -106,15 +106,14 @@ SID="full-session-001"
 }
 
 @test "-i: answers the question, then keeps chatting" {
-  unset CLAUDE_ASK_FORCE_INTERACTIVE
-  run "$SCRIPT_PATH" --no-pager -i "first" < <(printf 'second\n')
+  CLAUDE_ASK_FORCE_INTERACTIVE=1 run "$SCRIPT_PATH" --no-pager -i "first" < <(printf 'second\n')
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 2 ]
   [ "$(jq -r '.turn_count' "$SESSION_DIR/first.json")" = "2" ]
 }
 
 @test "without -i a question is answered once" {
-  run "$SCRIPT_PATH" --no-pager "only" < <(printf 'not asked\n')
+  run "$SCRIPT_PATH" --no-pager "only" < /dev/null
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
 }

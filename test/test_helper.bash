@@ -24,6 +24,11 @@ common_setup() {
   export CLAUDE_ASK_DEMO_DELAY=0
   # A wide terminal, so no test depends on the width of the one running it
   export CLAUDE_ASK_COLUMNS=200
+  # Tests capture stdout but look at the bar too; a real stdin could be a pipe
+  # that never ends, which a question would wait on
+  export CLAUDE_ASK_FORCE_TTY=1
+  unset NO_COLOR
+  exec < /dev/null
   # Never the real tmux session the suite may run in, nor the clipboard
   unset TMUX TMUX_PANE CLAUDE_STUB_TMUX_LOG CLAUDE_STUB_TMUX_SIZE CLAUDE_STUB_TMUX_BUFFER
   unset CLAUDE_STUB_TMUX_QUESTION CLAUDE_STUB_TMUX_RUN CLAUDE_STUB_TMUX_EXIT

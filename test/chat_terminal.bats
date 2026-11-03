@@ -157,3 +157,20 @@ pty_chat() {
   output_clean=$(printf '%s' "$output" | strip_ansi | tr -d '\001\002\r')
   [[ "$output_clean" == *"intr = ^C"* ]]
 }
+
+@test "pty: a paste arriving in pieces is still one question" {
+  pty_chat 'expect:> ' 'send:line one\r' 'sleep:0.05' 'send:line two\r' 'sleep:0.05' 'send:line three\r' \
+    'expect:chunks' 'expect:> ' 'send:exit\r'
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+  grep -qF '| line one\nline two\nline three' "$CLAUDE_STUB_LOG"
+  # Shown once each, not echoed by the terminal as well
+  [ "$(grep -c 'line two' <<< "$output_clean")" -eq 1 ]
+}
+
+@test "pty: script lines stay out of the chat history" {
+  pty_chat 'expect:> ' 'send:a question\r' 'expect:chunks' 'expect:> ' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  grep -qx 'a question' "$XDG_STATE_HOME/claude-ask/history"
+  ! grep -q 'LAST_TURN_STATUS' "$XDG_STATE_HOME/claude-ask/history"
+  ! grep -qx 'exit 0' "$XDG_STATE_HOME/claude-ask/history"
+}

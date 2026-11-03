@@ -14,6 +14,8 @@ claude-ask -r "And with --onto?"         # follow up in the most recent session
 claude-ask -r                            # continue the most recent session as a chat
 claude-ask --resume=3                    # continue the third newest (or --resume=NAME)
 git diff | claude-ask                    # piped input is the question
+git diff | claude-ask "Review this"      # or follows the question
+claude-ask "List 3 colors" > colors.txt  # just the answer in the file
 claude-ask --theme powerline "..."       # minimal | bubbles | powerline
 claude-ask -e high -m sonnet "..."       # effort level and model
 claude-ask -Y "..."                      # copy the answer's code blocks
@@ -53,6 +55,24 @@ the default.
 In a terminal too narrow for the whole status bar, segments are left out
 from the right (done, duration, cost, tokens); `CLAUDE_ASK_COLUMNS` sets the
 width it is fitted to.
+
+## Pipes and files
+
+Piped input (or a file on stdin) goes after the question, with a blank line
+between; with no question it is the question. It is read to its end, and after
+2 seconds of waiting a note says so: `< /dev/null` skips it. With `-i` the chat
+then continues on the terminal, and with no terminal `-i` is refused rather than
+taking each line for a question.
+
+When stdout is not a terminal it gets only the answer: no status bar, cursor
+moves, colors or default pager (a `--pager` you give still runs). The status bar
+goes to stderr if that is a terminal. `NO_COLOR` turns off colors everywhere.
+
+Control characters in answers and questions, other than tab and newline, are
+removed before they are shown or copied, so an escape sequence in something a
+tool fetched cannot reach the terminal. An answer holds all the messages it was
+shown with (a tool call can come between them), a blank line between each.
+Session files are `0600`; a new or the default session directory is `0700`.
 
 ## Chat commands
 

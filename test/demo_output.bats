@@ -5,7 +5,7 @@ load test_helper
 
 # The demo is run once for the whole file; each test checks its output
 setup_file() {
-  export CLAUDE_ASK_DEMO_DELAY=0
+  export CLAUDE_ASK_DEMO_DELAY=0 CLAUDE_ASK_FORCE_TTY=1
   export XDG_RUNTIME_DIR="$BATS_FILE_TMPDIR"
   local status=0
   "$BATS_TEST_DIRNAME/../bin/claude-ask" --demo-output --no-pager \

@@ -12,7 +12,7 @@ setup() {
   command -v tmux > /dev/null || skip "tmux is not installed"
   export TMUX_TMPDIR="$TEST_TEMP_DIR"
   # tmux needs a terminal type it knows (CI may have none, or dumb)
-  export PS1='READY$ ' PTY_SIZE=100x30 TERM=xterm-256color
+  export PTY_SIZE=100x30 TERM=xterm-256color
   export CLAUDE_STUB_LOG="$TEST_TEMP_DIR/calls"
   unset LESS
   PTY="$BATS_TEST_DIRNAME/helpers/pty_run.py"
@@ -26,9 +26,11 @@ teardown() {
 # in_tmux STEP...: run the steps at a shell in a tmux pane with the client
 # attached to the pseudo-terminal. CA is the claude-ask command line there.
 # "echo AF""TER" (and the like) prints a word the typed line does not hold.
+# PS1 is set in the pane's command: tmux runs it with $SHELL -c, and when
+# that is bash a non-interactive bash drops an inherited PS1.
 in_tmux() {
   run python3 "$PTY" 'expect:READY$ ' "$@" 'send:exit\r' -- \
-    tmux -L popup-test -f /dev/null new-session "bash --norc --noprofile"
+    tmux -L popup-test -f /dev/null new-session "PS1='READY\$ ' bash --norc --noprofile"
   screen_text=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b[()][A-Z0-9]//g' | tr -d '\001\002\r')
   # bats shows what a test prints only when it fails: what the client was
   # sent, and the pane now if the server is still up (the helper's status is

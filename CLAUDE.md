@@ -22,6 +22,15 @@ through a pager with a themed status bar redrawn just below the streamed text
   `bash -c`) or `--no-pager`. `run_pager` passes `COLUMNS`, since a pager
   writing to the streaming pipe cannot ask the terminal for its width.
   Tests set `CLAUDE_ASK_PAGER=cat`.
+- **Terminal or not**: `OUT_TTY` is whether stdout is a terminal
+  (`CLAUDE_ASK_FORCE_TTY` for tests; `common_setup` sets it and `exec < /dev/null`).
+  Bars, notes and cursor moves go to `BAR_FD`: stdout, else stderr if a terminal,
+  else `/dev/null`. Without `OUT_TTY`, stdout gets only the answer.
+- **Piped input**: `read_piped_input`; with a question only a pipe or file is
+  read. `-i` then does `exec < /dev/tty`. `CLAUDE_ASK_FORCE_INTERACTIVE` keeps
+  stdin as typed chat input.
+- **Control characters**: `CONTROL_CHARS_RE` (a jq regex), in the stream fields
+  and `clean` in `SESSION_TURNS_JQ`. Anything shown from a session file uses it.
 - **Sessions**: parsed JSON saved to
   `~/.local/share/claude/cli-sessions/{question-slug}.json`, plus the raw
   stream as `{question-slug}.jsonl` with `--save-raw`; `--history` lists
@@ -31,8 +40,8 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Question**: passed to `claude -p` on stdin, never as an argument.
 - **Chat and resume**: `ask_once` runs one turn (stream, save, report);
   `chat_loop` reads `> ` prompts and calls it; `CONV_*` holds the
-  conversation (session file, claude session id for `--resume`, turns, total
-  cost). `-r` loads the newest session file, `--resume=ID|N` the one
+  conversation (session file, claude session id for `--resume`, which works
+  from any directory, turns, total cost). `-r` loads the newest session file, `--resume=ID|N` the one
   `find_session` finds (shared with `--session`). No question + a terminal on
   stdin means chat; `CLAUDE_ASK_FORCE_INTERACTIVE` lets tests chat over a pipe.
   `chat_prompt` puts `LAST_MODEL` (or `MODEL`) and `EFFORT` in the prompt;
@@ -51,7 +60,7 @@ through a pager with a themed status bar redrawn just below the streamed text
   there. `test/chat_terminal.bats` drives a pseudo-terminal
   with `test/helpers/pty_run.py`.
   `chat_command` runs the `/word` commands (`/help`, `/effort`, `/model`,
-  `/theme`, `/status`, `/new`, `/exit`); a first word that is not `/[a-z]+`
+  `/theme`, `/yank`, `/status`, `/new`, `/exit`, `/quit`); a first word that is not `/[a-z]+`
   is a question.
 - **Effort and model**: `EFFORT` and `MODEL` (`-e`, `-m`, `CLAUDE_ASK_EFFORT`,
   `CLAUDE_ASK_MODEL`, `/effort`, `/model`; empty means claude's default) are
@@ -79,12 +88,18 @@ through a pager with a themed status bar redrawn just below the streamed text
   `CLAUDE_ASK_CLIPBOARD` at a temp file.
 - **Width**: `render_status_bar_fitted` drops segments to fit `TERM_COLS`
   (`read_term_cols`: `CLAUDE_ASK_COLUMNS`, the tty, `COLUMNS`; re-read on
-  WINCH); `update_status_bar` moves up by `text_rows`. Tests set
-  `CLAUDE_ASK_COLUMNS=200`.
+  WINCH). Tests set `CLAUDE_ASK_COLUMNS=200`.
+- **Redraw**: `update_status_bar` never computes a column: it makes rows with
+  `\eD` (keeps the column, unlike `\n`), moves back up by `text_rows`, and draws
+  between `\e7` and `\e8`. `emit_text` clears the old bar before text goes over
+  it. `test/screen.bats` reads real screens from a tmux pane; it starts below
+  the top-left, where tmux's `scroll-on-clear` turns `\e[J` into history.
 - **Session files**: one per conversation; `turns` plus top-level first
   question, last answer and totals (`SESSION_JQ`). Files from before turns are
   read as one turn (`SESSION_TURNS_JQ`'s `turns_of`). Model and cwd come from
   the `init` system event; hook events come before it.
+- **Answers**: events of one message share `.message.id`; a blank line goes
+  where it changes, in `process_stream_line` and `SESSION_JQ` alike.
 - **Stream parsing**: `process_stream_line` updates the state variables and
   is the only parser: the main loop, `--demo-output` and the tests all call
   it. It gets an event's fields from one long-lived `jq` coprocess

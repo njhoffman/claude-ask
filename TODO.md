@@ -6,9 +6,193 @@ normal or `(p3)` low, and a category: `[bug]`, `[feature]`, `[refactor]`,
 
 Reviewed: 2026-11-03
 
-No open items.
+## 3. Input and output
+
+- [x] **Piped input with `-i` asks one paid question per line.** (p2) [bug]
+  `printf 'a\nb\nc\n' | claude-ask -i` makes 3 `claude` calls, and
+  `git diff | claude-ask -i "review"` asks `review` and then every line of the
+  diff as its own question. `chat_loop` reads the pipe as typed input (meant
+  for `CLAUDE_ASK_FORCE_INTERACTIVE`, the tests). Read the pipe as the question
+  or its context, then chat on `/dev/tty`; with no terminal, refuse `-i`.
+- [x] **Piped input is dropped when a question is given.** (p2) [bug]
+  `echo DATA | claude-ask "summarize"` sends only `summarize`, with no warning;
+  `git diff | claude-ask "review this"` is the obvious way to use it. Send the
+  question followed by the piped text, keeping `--split` and `--popup` working
+  (the question file already handles the size).
+- [x] **Output to a file or pipe is full of escape codes.** (p2) [bug]
+  `claude-ask q > out` writes cursor moves, colors and every status bar redraw
+  to the file (14 of its lines in a one-line answer, 2249 bytes), since nothing
+  checks `-t 1`. So `claude-ask q | grep x` and `$(claude-ask q)` are unusable.
+  When stdout is not a terminal print only the answer, with the status bar on
+  stderr if that is a terminal. Honor `NO_COLOR` at the same time (no support
+  today), and consider 256-color fallbacks: the palette is truecolor only.
+- [x] **Text after a wrapped line or wide characters lands in the wrong
+  place.** (p2) [bug] `emit_text` counts characters into `CURSOR_COL`, and
+  `update_status_bar` restores that column with `\e[%dG`. On a real screen
+  (`tmux capture-pane`, 60 columns) a 130-character chunk followed by `TAIL`
+  shows `T` at column 60 and `AIL` on the next row, and `日本語日本語` followed
+  by `TAIL` shows `日本語TAIL`: the text is overwritten. Pager output with
+  color codes is counted the same way. Save and restore the cursor (`\e7`,
+  `\e8`, or `\e[s`, `\e[u`) instead of computing a column, watching for
+  scrolling, or count display width modulo `TERM_COLS`.
+- [x] **Messages of one answer run together.** (p2) [bug] With a tool call
+  between two assistant messages, the answer shows
+  `Let me check that.The answer is 42.`: `process_stream_line` appends each
+  message's text with nothing between them, which also breaks Markdown. Add a
+  blank line between messages. The saved `answer`, `/yank` and `--session`
+  keep only the `result` text (the last message), unlike what was shown; decide
+  whether that is what they should hold.
+- [x] **Answers can send escape sequences to the terminal.** (p2) [bug] A text
+  block holding `\u001b]52;c;...` reaches stdout as it is with `--no-pager` or
+  no `nvcat` (checked), so a page a tool fetched could set the clipboard or the
+  window title; `less -R` and session replay need checking too. Strip control
+  characters except newline and tab from the answer, and from questions shown
+  by `--history` and `--session`.
+- [x] **A paste that arrives in pieces becomes several questions.** (p2) [bug]
+  `chat_loop` gathers only lines already waiting (`read -t 0`), so two lines 50ms
+  apart make 2 `claude` calls, which is likely over ssh or a slow tmux
+  `paste-buffer` (one 300-line write is fine). Wait a short time, say 30ms, before
+  deciding nothing more is coming. The reverse also happens: two lines typed
+  ahead while an answer streams are merged into one question.
+- [ ] **Real streaming with `--include-partial-messages`.** (p2) [feature]
+  `claude` emits whole messages unless given that option, which the script does
+  not pass, so a long answer appears all at once when its message is done and
+  the status bar sits still until then. Pass it and parse the `stream_event`
+  text deltas, without printing the final `assistant` message again. Far more
+  chunks would end mid-line, so see the exact-width item below.
+- [ ] **Show what `claude` is doing during tool calls.** (p3) [feature]
+  `tool_use` blocks are ignored (`Bash` never appears in the output), so a long
+  tool run looks like a hung spinner. Put the tool's name in the info line, as
+  `thinking...` is now, and show denied tools: in `-p` mode these fail quietly.
+
+## 4. Sessions and chat history
+
+- [x] **Script source lines end up in the chat history.** (p2) [bug]
+  `chat_loop` runs `set -o history` and never turns it off, so bash records
+  the rest of the script as it reads it: after a chat the history file ends
+  with `if [[ "$LAST_TURN_STATUS" -ne 0 ]]; then exit 1; fi` and `exit 0`, and
+  the up arrow offers them. Run `set +o history` when the chat ends, add a test,
+  and remove the lines already in `~/.local/state/claude-ask/history`.
+- [x] **Session files are readable by other users.** (p2) [bug] Sessions hold
+  questions, piped diffs and answers, but are created with the umask (`0664`
+  here, in a `0775` directory), unlike the chat history (`0600`). Create the
+  directory `0700` and the files `0600` (`umask 077` around `save_session`,
+  including `--save-raw`), and tighten existing ones when they are next written.
+- [ ] **A corrupt session file gives a poor error.** (p3) [bug]
+  `--session bad` prints jq's parse error and exits 0; `--resume=bad` says "has
+  no session id and cannot be resumed". Check that the file parses and report
+  "NAME is not a valid session file", exit 1.
+- [ ] **`--session` opens the pager once per turn.** (p3) [bug] `show_turn` runs
+  the pager for each turn, so a 3-turn session runs it 3 times (counted) and
+  with the default `nvcat --pager less` needs `q` once per turn. Render all
+  turns as one document for one pager.
+- [ ] **Multi-line questions come back split from the history file.** (p3) [bug]
+  A pasted question is one entry during the chat, but the file holds its lines
+  separately, so next time each is its own up-arrow entry. Bash has no format
+  for this without timestamps: `HISTTIMEFORMAT` with `lithist`, or store them
+  joined.
+- [ ] **The session directory ignores `XDG_DATA_HOME`.** (p3) [bug] `STATE_DIR`
+  honors `XDG_STATE_HOME`, but `SESSION_DIR` is always under
+  `~/.local/share/claude/`, inside a directory named after another tool. Use
+  `${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions`, falling back to the old
+  place when it holds sessions; the completion files glob it too.
+- [ ] **Search and prune sessions.** (p3) [feature] Sessions pile up with no way
+  to find or remove them: `--history` lists all of them. Add a limit
+  (`--history=N`), a search over questions and answers, and `--delete ID|N` or
+  an age-based prune.
+- [ ] **`--history` does not fit the terminal.** (p3) [bug] The table has fixed
+  widths of about 90 columns, wrapping in a narrow pane, and counts characters,
+  so 39 double-width characters take 78 columns and push the row out of line.
+  Use `TERM_COLS` and display width; `disp_name` also hides what makes long names
+  differ.
+
+## 5. Options and tmux
+
+- [ ] **`--split` and `--popup` lose the shell's environment.** (p3) [bug]
+  tmux runs them with the server's environment, and `launch_in_tmux` passes on
+  only `PATH`, `SESSION_DIR`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `EDITOR` and
+  `CLAUDE_ASK_*`. So `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`, `HTTPS_PROXY`,
+  `LESS` and the like set in this shell are not seen, and could mean another
+  account. Do not just add them with `-e`, which puts a key in the process list:
+  write them to a private file the new run reads and deletes, like the question.
+- [ ] **`EDITOR` with arguments fails.** (p3) [bug] `compose_in_editor` runs
+  `"${EDITOR:-vi}" "$f"`, so `EDITOR="code --wait"` gives "No such file or
+  directory" and `\e` just returns to the prompt. Run it with `bash -c` as git
+  does, and try `VISUAL` first.
+- [ ] **No `--theme=X`, `--effort=X`, `--model=X`, or `-ir`.** (p3) [bug] All are
+  "Unknown option", though `--split=`, `--resume=` and `--debug-log=` take that
+  form. Accept `=` for every option with a value and split bundled short flags,
+  and add them to both completion files.
+- [ ] **Pass options through to `claude`.** (p3) [feature] Nothing reaches
+  `claude` except `--effort`, `--model` and `--resume`, so a chat cannot use
+  `--allowedTools`, `--permission-mode`, `--add-dir` or
+  `--append-system-prompt`. Add `CLAUDE_ASK_ARGS` or a repeatable
+  `--claude-arg`, saved with the session so `-r` keeps it.
+- [ ] **Yank over ssh with OSC 52.** (p3) [feature] Over ssh with no `DISPLAY`
+  there is no clipboard command, so outside tmux `-y` fails. Fall back to the
+  OSC 52 escape, which most terminals and tmux pass to the local clipboard, and
+  add `clip.exe` for WSL.
+- [ ] **Check the bash version.** (p3) [bug] The shebang is `#!/bin/bash`, which
+  is 3.2 on macOS even with a newer bash installed, and nothing checks
+  `BASH_VERSINFO`, so it fails with confusing errors (`mapfile`, `coproc`,
+  `EPOCHREALTIME`), although `pbcopy` suggests macOS is meant to work. Use
+  `#!/usr/bin/env bash` and exit with a clear message below 5.
+
+## 6. Repository
+
+- [ ] **A chunk ending exactly at the terminal width loses its last character
+  on screen.** (p3) [bug] The cursor there is "pending wrap", which moving it
+  clears, so the next text overwrites the last cell: 59 `x` and `Z` in 60 columns
+  followed by `TAIL` shows `x...xTAIL`. Only the screen is affected, not the saved
+  answer, and the column-counting code before 0.9.0 did it too. It matters more
+  once partial messages make chunks end mid-line. Telling needs the column: count
+  display width only to detect this case, and move to the next row first.
+- [ ] **Lines typed ahead during an answer merge into one question.** (p3) [bug]
+  Two lines typed while an answer streams are waiting at the next prompt, so
+  they look like a paste. Flushing typed-ahead input before the prompt would
+  fix it, at the cost of losing a line typed ahead on purpose.
+- [ ] **No colors but truecolor.** (p3) [feature] Since 0.9.0 `NO_COLOR` is
+  honored, but the palette is 24-bit only, which a 256-color terminal shows
+  wrongly. Fall back on `COLORTERM`.
+- [ ] **Test older tool versions in CI.** (p3) [chore] jq 1.7 already broke
+  saving (0.6.2) and tmux 3.4 may be breaking `--popup`. Add `ubuntu-22.04` (jq
+  1.6, bash 5.1, an older tmux) to the matrix, or state the minimum versions in
+  the README. `launch_in_tmux` assumes `display-popup -e` and does not check.
+- [ ] **A smoke test against the real `claude`.** (p3) [test] Every test replays
+  fixtures, so a change in the stream format would go unnoticed, and the `-r` and
+  partial-message items above need the real thing. Add `just smoke`, not in CI,
+  that asks one cheap question with haiku and checks parsing, saving and resume.
+- [ ] **`just lint` skips the stubs and helpers.** (p3) [chore] It checks only
+  the script and the bash completion; `shellcheck` reports 12 findings in
+  `test/stubs/*` and `test/test_helper.bash`. Fix them and add those files.
+- [ ] **`bc` is only used by one test.** (p3) [chore] The script stopped needing
+  it, but `test/mock_stream.bats:81` still calls it, so CI installs it. Compare
+  with `awk` or `jq` and drop it from `ci.yml`.
+- [ ] **No license.** (p3) [chore] The repository is public with no `LICENSE`, so
+  by default nobody else may use or change it. Add one if that is not the intent.
+- [ ] **One helper for the session file list.** (p3) [refactor] `ls -t
+  "$dir"/*.json` is written out in `newest_session_file`, `show_history` and
+  `find_session`; the themes are listed in two regexes, `CHAT_THEMES`,
+  `run_theme_demo` and the completions; the model aliases in `chat_help`,
+  `CHAT_MODEL_ALIASES` and the completions. Keep one of each. The drift test
+  checks only option names, so extend it to the values.
+- [ ] **Small doc fixes.** (p3) [docs] CLAUDE.md's list of slash commands lacks
+  `/yank` and `/quit`, and has no word on `/editor`. In `bin/claude-ask`, the
+  comment about the question file (line 369) now sits above the
+  `_CLAUDE_ASK_STARTED` block instead of the code it describes.
 
 ## Completed
+
+### 2. CI (completed 2026-11-03)
+
+- [x] **The real-tmux popup tests fail on CI.** (p1) [test] All four tests in
+  `test/tmux_popup.bats` fail on the 0.8.2 run (41735238717, tmux 3.4), each
+  about 11s, so an `expect` step timing out; the rest of the suite passes. They
+  pass here on tmux next-3.9 and on Ubuntu's 3.5a, also with a minimal
+  environment and no terminal on stdin, so it is either tmux 3.4 or the runner.
+  Which step fails is unknown because a failing test prints nothing: first make
+  `in_tmux` print the screen on failure. Until then it is not known whether
+  `--popup` itself works on tmux 3.4.
 
 ### 1. claude-ask (completed 2026-11-03)
 

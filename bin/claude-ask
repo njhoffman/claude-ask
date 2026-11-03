@@ -11,8 +11,9 @@
 # questions ("default" clears them); /yank [code [N]] copies the last answer
 # or its code blocks; /help lists the rest, and Tab completes them; exit,
 # quit or Ctrl-D ends the chat; Ctrl-C stops the current answer (at the
-# prompt, it clears the line). Piped input with no question is read as one
-# question.
+# prompt, it clears the line). Piped input is read as the question, or added
+# after the one given; with -i the chat then goes on at the terminal. When
+# stdout is not a terminal it gets only the answer.
 #
 # Options:
 #   -i, --interactive  Keep the chat open after answering the question
@@ -63,6 +64,8 @@
 #   claude-ask --split "Explain this error"        # answer in a new pane
 #   claude-ask --popup                            # chat in a tmux popup
 #   git diff | claude-ask                         # piped input is the question
+#   git diff | claude-ask "Review this"           # or follows the question
+#   claude-ask "List 3 colors" > colors.txt       # just the answer, no bar in it
 #   claude-ask --theme powerline "Explain git rebase"
 #   claude-ask --demo-themes
 #   claude-ask --no-pager "List common bash shortcuts"
@@ -79,6 +82,8 @@
 #   CLAUDE_ASK_MODEL   The default model (-m overrides it)
 #   CLAUDE_ASK_DEMO_DELAY  Seconds between demo frames (default: 0.08 themes, 0.03 output)
 #   CLAUDE_ASK_FORCE_INTERACTIVE  Chat even when stdin is not a terminal (tests)
+#   CLAUDE_ASK_FORCE_TTY  Draw as if stdout were a terminal (tests)
+#   NO_COLOR           When set and not empty, no colors
 #   CLAUDE_ASK_COLUMNS  The terminal width the status bar is fitted to
 #                      (default: the terminal's own)
 #   CLAUDE_ASK_CLIPBOARD  Command that copies stdin, run with bash -c
@@ -121,7 +126,8 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-ask"
 DEFAULT_DEBUG_LOG="$STATE_DIR/debug.log"
 CHAT_HISTORY_FILE="$STATE_DIR/history"
 MAX_DISPLAY_NAME=20
-SESSION_DIR="${SESSION_DIR:-$HOME/.local/share/claude/cli-sessions}"
+DEFAULT_SESSION_DIR="$HOME/.local/share/claude/cli-sessions"
+SESSION_DIR="${SESSION_DIR:-$DEFAULT_SESSION_DIR}"
 CLAUDE_BIN="${CLAUDE_ASK_BIN:-claude}"
 # Passed to claude as --effort and --model; empty means claude's own default.
 # The stream never says which effort claude used, so only one set here is shown.
@@ -366,13 +372,13 @@ debug_log "args parsed: EFFORT=${EFFORT:-default} MODEL=${MODEL:-default} THEME=
 
 question="${POSITIONAL[*]:-}"
 
-# --split and --popup hand the question to the new claude-ask in a private
-# temp file (a long piped question could be too big for a tmux command)
 # In a popup: tell launch_in_tmux the run started (see there)
 if [[ -n "${_CLAUDE_ASK_STARTED:-}" ]]; then
   rm -f "$_CLAUDE_ASK_STARTED"
   unset _CLAUDE_ASK_STARTED
 fi
+# --split and --popup hand the question to the new claude-ask in a private
+# temp file (a long piped question could be too big for a tmux command)
 if [[ -n "${_CLAUDE_ASK_QUESTION_TMP:-}" ]]; then
   if [[ -z "$question" && -f "$_CLAUDE_ASK_QUESTION_TMP" ]]; then
     question=$(< "$_CLAUDE_ASK_QUESTION_TMP")
@@ -381,20 +387,55 @@ if [[ -n "${_CLAUDE_ASK_QUESTION_TMP:-}" ]]; then
   unset _CLAUDE_ASK_QUESTION_TMP
 fi
 
-# Chat when there is no question and a person is typing; piped input with no
-# question is the question itself. -y or -Y with no question and no chat
-# copies a saved answer instead.
-if [[ "$DEMO_THEMES" -eq 0 && "$DEMO_OUTPUT" -eq 0 && "$SHOW_HISTORY" -eq 0 && -z "$VIEW_SESSION" && -z "$question" ]]; then
-  if [[ -n "$YANK" && "$INTERACTIVE" -eq 0 && "$RESUME" -eq 0 && (-t 0 || -n "${CLAUDE_ASK_FORCE_INTERACTIVE:-}") ]]; then
-    YANK_PREVIOUS=1
-  elif [[ -t 0 || -n "${CLAUDE_ASK_FORCE_INTERACTIVE:-}" ]]; then
-    INTERACTIVE=1
-  elif [[ "$INTERACTIVE" -eq 0 ]]; then
-    question="$(cat)"
-    debug_log "question read from stdin, length=${#question}"
-    if [[ ! "$question" =~ [^[:space:]] ]]; then
+# Read all of stdin into PIPED_INPUT, saying so if it takes a while: a stdin
+# that never ends (inherited from a parent) waits until Ctrl-C. The note's
+# sleep has its own fds, so it cannot hold a caller's pipe open once killed.
+read_piped_input() {
+  local note
+  (
+    sleep 2 > /dev/null 2>&1
+    echo "claude-ask: waiting for piped input (< /dev/null skips it)" >&2
+  ) &
+  note=$!
+  PIPED_INPUT=$(cat)
+  kill "$note" 2> /dev/null || true
+  wait "$note" 2> /dev/null || true
+}
+
+# With a terminal on stdin (or the tests' stand-in, whose stdin is the typed
+# input), no question means a chat, or with -y or -Y copying a saved answer.
+# Otherwise stdin is input: the whole question, or what follows the one given
+# (only a pipe or a file, so /dev/null or a socket is not waited on), and -i
+# goes on to chat on the terminal, which it refuses to do when there is none
+# rather than take lines of a pipe for questions.
+if [[ "$DEMO_THEMES" -eq 0 && "$DEMO_OUTPUT" -eq 0 && "$SHOW_HISTORY" -eq 0 && -z "$VIEW_SESSION" ]]; then
+  if [[ -t 0 || -n "${CLAUDE_ASK_FORCE_INTERACTIVE:-}" ]]; then
+    if [[ -z "$question" ]]; then
+      if [[ -n "$YANK" && "$INTERACTIVE" -eq 0 && "$RESUME" -eq 0 ]]; then
+        YANK_PREVIOUS=1
+      else
+        INTERACTIVE=1
+      fi
+    fi
+  else
+    PIPED_INPUT=""
+    if [[ -z "$question" || -p /dev/stdin || -f /dev/stdin ]]; then
+      read_piped_input
+      debug_log "piped input, length=${#PIPED_INPUT}"
+    fi
+    if [[ "$PIPED_INPUT" =~ [^[:space:]] ]]; then
+      question+="${question:+$'\n\n'}$PIPED_INPUT"
+    fi
+    if [[ -z "$question" && "$INTERACTIVE" -eq 0 ]]; then
       echo "No question provided." >&2
       exit 1
+    fi
+    # A new pane or popup has its own terminal
+    if [[ "$INTERACTIVE" -eq 1 && -z "$TMUX_MODE" ]]; then
+      if ! { exec < /dev/tty; } 2> /dev/null; then
+        echo "Error: -i needs a terminal to chat on" >&2
+        exit 1
+      fi
     fi
   fi
 fi
@@ -442,6 +483,29 @@ FG_DIM=$'\e[38;2;108;112;134m' # #6c7086 overlay0
 SEP_BUBBLE_LEFT=$'\ue0b6'  #
 SEP_BUBBLE_RIGHT=$'\ue0b4' #
 SEP_POWERLINE=$'\ue0b0'    #
+
+# NO_COLOR (no-color.org): every color variable empty; the layout stays
+if [[ -n "${NO_COLOR:-}" ]]; then
+  for _color in RST BOLD "${!FG_@}" "${!BG_@}"; do
+    printf -v "$_color" '%s' ""
+  done
+  unset _color
+fi
+
+# Where the status bar and notes go. stdout, when it is a terminal; otherwise
+# stdout gets only the answer (no bar, cursor moves or colors in a file or a
+# pipe) and they go to stderr if that is a terminal, else nowhere. The default
+# pager is for terminals too: a --pager given on the command line still runs.
+OUT_TTY=0
+if [[ -t 1 || -n "${CLAUDE_ASK_FORCE_TTY:-}" ]]; then OUT_TTY=1; fi
+if ((OUT_TTY)); then
+  exec {BAR_FD}>&1
+elif [[ -t 2 ]]; then
+  exec {BAR_FD}>&2
+else
+  exec {BAR_FD}> /dev/null
+fi
+if ((!OUT_TTY)) && [[ "$PAGER_IS_DEFAULT" -eq 1 ]]; then USE_PAGER=0; fi
 
 # Spinner frames
 SPINNER=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
@@ -765,7 +829,8 @@ reset_stream_state() {
   cost=""
   duration_ms=""
   answer_text=""
-  result_text="" # the result event's text: the whole final answer
+  answer_message_id="" # the message answer_text last grew from
+  result_text="" # the result event's text: the last message, or the error
   status="running" # running, done or error
   stream_error=""
   api_error="" # an assistant event's error code, e.g. model_not_found
@@ -776,11 +841,17 @@ reset_stream_state() {
   CHUNK=""
 }
 
-# The fields of one event, each NUL-terminated (with any NUL inside taken
-# out, so a record is always STREAM_FIELD_COUNT fields): type, model,
+# Control characters but tab and newline, as a jq regex: what must not reach
+# the terminal from an answer or a question (an escape sequence could set the
+# clipboard or the title, and an answer may quote what a tool fetched). The
+# NUL among them also keeps a record at STREAM_FIELD_COUNT fields.
+CONTROL_CHARS_RE='[\u0000-\u0008\u000b-\u001f\u007f-\u009f]'
+
+# The fields of one event, each NUL-terminated, with control characters taken
+# out: type, model,
 # session_id, text (every text block joined), has_thinking, input tokens,
 # output tokens, cost, duration_ms, is_error, result text, error (an
-# assistant event's error code).
+# assistant event's error code), message id (one message can span events).
 # shellcheck disable=SC2016 # $u is a jq variable
 STREAM_FIELDS_JQ='
   (if .type == "result" then .usage else .message.usage end) as $u
@@ -790,9 +861,10 @@ STREAM_FIELDS_JQ='
       $u.input_tokens, $u.output_tokens, .total_cost_usd, .duration_ms,
       (if .is_error == true then 1 else 0 end),
       (if .type == "result" then .result else null end),
-      (if .type == "assistant" then .error else null end) ]
-  | map((. // "" | tostring | gsub("\u0000"; "")) + "\u0000") | add'
-STREAM_FIELD_COUNT=12
+      (if .type == "assistant" then .error else null end),
+      .message.id ]
+  | map((. // "" | tostring | gsub("'"$CONTROL_CHARS_RE"'"; "")) + "\u0000") | add'
+STREAM_FIELD_COUNT=13
 
 # The parser is one jq that lives for the whole run, a coprocess fed one
 # line at a time, instead of a jq started for every event. It reads raw
@@ -879,6 +951,12 @@ process_stream_line() {
       elif [[ -n "${f[3]}" ]]; then
         is_thinking=0
         CHUNK="${f[3]}"
+        # A new message of the same answer (a tool call came between); the
+        # events of one message share its id
+        if [[ -n "$answer_text" && -n "${f[12]}" && "${f[12]}" != "$answer_message_id" ]]; then
+          CHUNK=$'\n\n'"$CHUNK"
+        fi
+        if [[ -n "${f[12]}" ]]; then answer_message_id="${f[12]}"; fi
         answer_text+="$CHUNK"
         text_chunks=$((text_chunks + 1))
         answer_chars=$((answer_chars + ${#CHUNK}))
@@ -1037,7 +1115,7 @@ yank_answer() {
 # the -y/-Y choice
 yank_session_file() {
   local answer
-  answer=$(jq -r '.answer // empty' "$1")
+  answer=$(jq -r "${SESSION_TURNS_JQ}"'.answer // empty | clean' "$1")
   yank_answer "$answer" "$YANK" "$YANK_CODE_N"
 }
 
@@ -1122,6 +1200,7 @@ chat_complete() {
 #
 # shellcheck disable=SC2016 # jq programs
 SESSION_TURNS_JQ='
+  def clean: gsub("'"$CONTROL_CHARS_RE"'"; "");
   def turns_of:
     if .turns then .turns
     else [{question, answer, is_error: (.is_error // false), thinking,
@@ -1139,12 +1218,23 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
   | ($events | map(select(.type == "system")) | first) as $sys
   | ($events | map(select(.type == "result")) | last) as $res
   | ($prev | first) as $p
+  # What was shown: every message, as process_stream_line joins them (a
+  # blank line where the message id changes). The result event repeats only
+  # the last one (or holds the error).
+  | (reduce ($events[] | select(.type == "assistant" and (.error | not))
+             | {id: .message.id,
+                text: ([.message.content[]? | select(.type == "text") | .text] | join(""))}
+             | select(.text != "")) as $e
+       ({id: null, text: ""};
+        {id: ($e.id // .id),
+         text: (.text + (if .text != "" and $e.id != null and $e.id != .id then "\n\n" else "" end) + $e.text)})
+     | .text) as $shown
   | {
       question: $question,
       model: ($init.model // null),
       model_option: (if $model_option == "" then null else $model_option end),
       effort: (if $effort == "" then null else $effort end),
-      answer: ($res.result // null),
+      answer: (if $shown != "" then $shown else ($res.result // null) end),
       is_error: ($res.is_error // false),
       thinking: ([$events[] | select(.type == "assistant") | .message.content[]?
                   | select(.type == "thinking") | .thinking]
@@ -1222,16 +1312,25 @@ save_session() {
   debug_log "saving session turn: name=$name file=$file"
   # Written beside the target and moved, so a failed save leaves the old file
   tmp="${file}.tmp.$$"
-  if jq -nR --arg question "$question" --arg name "$name" --slurpfile prev "$prev" \
-    --arg effort "${EFFORT:-}" --arg model_option "${MODEL:-}" \
-    "$SESSION_JQ" "$raw" > "$tmp"; then
+  # Private: questions and piped input can hold anything. Only here, since
+  # the tools claude runs should keep the user's umask
+  if (
+    umask 077
+    jq -nR --arg question "$question" --arg name "$name" --slurpfile prev "$prev" \
+      --arg effort "${EFFORT:-}" --arg model_option "${MODEL:-}" \
+      "$SESSION_JQ" "$raw" > "$tmp"
+  ); then
     mv -f "$tmp" "$file"
   else
     rm -f "$tmp"
     return 1
   fi
   if [[ "$SAVE_RAW" -eq 1 ]]; then
-    cat "$raw" >> "${SESSION_DIR}/${name}.jsonl"
+    (
+      umask 077
+      cat "$raw" >> "${SESSION_DIR}/${name}.jsonl"
+    )
+    chmod 600 "${SESSION_DIR}/${name}.jsonl"
   fi
   printf '%s\n' "$file"
 }
@@ -1495,7 +1594,6 @@ run_demo_output() {
 
       # Feed mock data through the same pipeline the real CLI uses
       reset_stream_state
-      CURSOR_COL=1
       STATUS_BAR_VISIBLE=0
       STREAM_START=$SECONDS
 
@@ -1586,7 +1684,7 @@ HISTORY_JQ="${SESSION_TURNS_JQ}"'
      ($t[0].question // ""),
      ($t | map(.answer // "" | split("\n") | length) | add // 0),
      ($t | length)]
-  | map(tostring | gsub("\u0000"; "") + "\u0000") | add'
+  | map(tostring | clean + "\u0000") | add'
 
 # history_records FILE...: set HISTORY_RECORDS to the files' fields, with
 # one jq for all of them. jq stops at a file that is not JSON, so when the
@@ -1732,7 +1830,7 @@ show_turns() {
     | turns_of | (if $which == "last" then [last] else . end)[]
     | [(.model // $model), .effort, .question, .answer, (.is_error // false),
        .cost_usd, .duration_ms, .usage.input_tokens, .usage.output_tokens]
-    | map((. // "" | tostring) + "\u0000") | add' "$file")
+    | map((. // "" | tostring | clean) + "\u0000") | add' "$file")
   for ((i = 0; i + 8 < ${#fields[@]}; i += 9)); do
     if ((i > 0)); then printf '\n'; fi
     model_label label "$(short_model_name "${fields[i]}")" "${fields[i + 1]}"
@@ -1753,11 +1851,16 @@ show_turn() {
   format_tokens disp_in "$7"
   format_tokens disp_out "$8"
 
-  if [[ -n "$q" ]]; then
-    printf '%s> %s%s\n' "$FG_DIM" "$q" "$RST"
+  if ((OUT_TTY)); then
+    if [[ -n "$q" ]]; then
+      printf '%s> %s%s\n' "$FG_DIM" "$q" "$RST"
+    fi
+  elif [[ -n "$q" ]]; then
+    printf '> %s\n' "$q"
   fi
   render_status_bar_fitted bar_text "$mark" "$model" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$state"
-  printf '%s\n\n' "$bar_text"
+  printf '%s\n' "$bar_text" >&"$BAR_FD"
+  if ((OUT_TTY)); then printf '\n'; fi
 
   if [[ "$USE_PAGER" -eq 1 ]]; then
     printf '%s' "$answer" | run_pager
@@ -1799,37 +1902,37 @@ fi
 # ---------------------------------------------------------------------------
 # Cursor tracking & status bar rendering (below content)
 # ---------------------------------------------------------------------------
-CURSOR_COL=1 # 1-indexed terminal column position
 STATUS_BAR_VISIBLE=0
 STREAM_START=0
 
+# Text goes over the bar's rows, so they are cleared first (it is redrawn
+# below the text after), or the end of a long bar line would stay beside it
 emit_text() {
-  local text="$1"
-  [[ -z "$text" ]] && return 0
-  printf '%s' "$text"
-  # Track column position after last newline
-  if [[ "$text" == *$'\n'* ]]; then
-    local after="${text##*$'\n'}"
-    CURSOR_COL=$((${#after} + 1))
-  else
-    CURSOR_COL=$((CURSOR_COL + ${#text}))
+  [[ -n "$1" ]] || return 0
+  if ((STATUS_BAR_VISIBLE)); then
+    printf '\e[J' >&"$BAR_FD"
+    STATUS_BAR_VISIBLE=0
   fi
+  printf '%s' "$1"
 }
 
 # Arguments: those of render_status_bar, without OUT
+#
+# The bar is drawn under the text and the cursor put back where it was, with
+# no idea which column that is, since counting one is wrong for wrapped lines,
+# wide characters and a pager's colors. The rows it needs are made first (\eD,
+# index: down one, scrolling at the bottom, in the same column, unlike \n),
+# so nothing scrolls between saving the cursor and restoring it.
 update_status_bar() {
-  local bar_text info_text bar_rows info_rows
+  local bar_text info_text bar_rows info_rows rows i out=""
   render_status_bar_fitted bar_text "$@"
   render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking" "${CONV_INFO:-}"
   text_rows bar_rows "$bar_text"
   text_rows info_rows "$info_text"
-  # Clear from cursor to end of screen (removes old status bar + info)
-  printf '\e[J'
-  # Move down 2 lines, print status bar, then info line below
-  printf '\n\n\e[2K%s\n\e[2K%s' "$bar_text" "$info_text"
-  # Move back up past the blank line and every row the bar and info line
-  # took (more than one each when they wrap), and restore the column
-  printf '\e[%dA\e[%dG' "$((1 + bar_rows + info_rows))" "$CURSOR_COL"
+  rows=$((1 + bar_rows + info_rows))
+  for ((i = 0; i < rows; i++)); do out+=$'\eD'; done
+  # Clear below the cursor (the old bar and info), then draw two lines down
+  printf '%s\e[%dA\e7\e[J\n\n\e[2K%s\n\e[2K%s\e8' "$out" "$rows" "$bar_text" "$info_text" >&"$BAR_FD"
   STATUS_BAR_VISIBLE=1
 }
 
@@ -1837,10 +1940,14 @@ finalize_status_bar() {
   local bar_text info_text
   render_status_bar_fitted bar_text "$@"
   render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "" "done" "$is_thinking" "${CONV_INFO:-}"
-  # Clear from cursor to end of screen
-  printf '\e[J'
-  # Print final status bar + info line 2 lines below content
-  printf '\n\n%s\n%s\n' "$bar_text" "$info_text"
+  # Clear from cursor to end of screen, and print the final status bar and
+  # info line 2 lines below content (stdout's answer gets just its newline)
+  if ((OUT_TTY)); then
+    printf '\e[J\n\n%s\n%s\n' "$bar_text" "$info_text"
+  else
+    printf '\e[J%s\n%s\n' "$bar_text" "$info_text" >&"$BAR_FD"
+    if [[ -n "$answer_text" && "$STREAM_OUTPUT" -eq 1 ]]; then printf '\n'; fi
+  fi
   STATUS_BAR_VISIBLE=0
 }
 
@@ -1881,7 +1988,7 @@ show_final_status_bar() {
 print_batch_answer() {
   [[ "$STREAM_OUTPUT" -eq 0 && -n "$answer_text" ]] || return 0
   # Clear the status bar area (was showing progress only)
-  printf '\e[J'
+  printf '\e[J' >&"$BAR_FD"
   STATUS_BAR_VISIBLE=0
   if [[ "$USE_PAGER" -eq 1 ]]; then
     printf '%s' "$answer_text" | run_pager
@@ -1910,9 +2017,9 @@ cleanup() {
   debug_log "cleanup called"
   # Clear any lingering status bar below content
   if [[ "${STATUS_BAR_VISIBLE:-0}" -eq 1 ]]; then
-    printf '\e[J'
+    printf '\e[J' >&"$BAR_FD"
   fi
-  printf '\e[?25h' # ensure cursor visible
+  printf '\e[?25h' >&"$BAR_FD" # ensure cursor visible
   if [[ -n "$PAGER_PID" ]]; then kill "$PAGER_PID" 2> /dev/null || true; fi
   if [[ -n "$CLAUDE_PID" ]]; then kill "$CLAUDE_PID" 2> /dev/null || true; fi
   stop_stream_jq
@@ -2053,7 +2160,6 @@ ask_once() {
   read_term_cols
   reset_stream_state
   STREAM_START=$SECONDS
-  CURSOR_COL=1
   TURN_INTERRUPTED=0
   CONV_INFO=""
   if ((CONV_TURNS > 0)); then CONV_INFO="turn $((CONV_TURNS + 1))"; fi
@@ -2090,9 +2196,8 @@ ask_once() {
 
   # An interrupted answer is not saved: claude sent no result for it
   if ((TURN_INTERRUPTED)); then
-    printf '\e[J'
+    printf '\e[J\n%s(interrupted)%s\n' "$FG_DIM" "$RST" >&"$BAR_FD"
     STATUS_BAR_VISIBLE=0
-    printf '\n%s(interrupted)%s\n' "$FG_DIM" "$RST"
     return 130
   fi
 
@@ -2153,7 +2258,7 @@ ask_once() {
   fi
   MODEL_GOOD="$MODEL"
   MODEL_RESTORED=0
-  LAST_ANSWER="${result_text:-$answer_text}"
+  LAST_ANSWER="${answer_text:-$result_text}"
   LAST_MODEL="$model"
   LAST_MODEL_FOR="$MODEL"
   # -y/-Y copy every new answer; a failed copy is reported, the turn is fine
@@ -2282,7 +2387,7 @@ resume_session() {
     | [(.session_id // ""), (turns_of | length), (.cost_usd // ""), (.cwd // ""),
        ($last.effort // ""), ($last.model_option // ""), ($last.answer // ""),
        ($last.model // .model // "")]
-    | map(tostring + "\u0000") | add' "$file")
+    | map(tostring | clean + "\u0000") | add' "$file")
   if [[ -z "${fields[0]:-}" ]]; then
     echo "claude-ask: $(basename "$file" .json) has no session id and cannot be resumed" >&2
     return 1
@@ -2307,8 +2412,9 @@ resume_session() {
   if ((CONV_TURNS != 1)); then header+="s"; fi
   header+="${total:+, $total}"
   header+=")${fields[3]:+ from ${fields[3]}}"
-  printf '%s%s%s\n\n' "$FG_DIM" "$header" "$RST"
-  show_turns "$file" last
+  printf '%s%s%s\n\n' "$FG_DIM" "$header" "$RST" >&"$BAR_FD"
+  # stdout not a terminal: it is for the new answer, not the old one
+  if ((OUT_TTY)); then show_turns "$file" last; fi
 }
 
 # Open $EDITOR for a multi-line question; sets COMPOSED, returns 1 if empty
@@ -2323,7 +2429,7 @@ compose_in_editor() {
 
 # A dim note at the chat prompt
 chat_note() {
-  printf '%s%s%s\n' "$FG_DIM" "$*" "$RST"
+  printf '%s%s%s\n' "$FG_DIM" "$*" "$RST" >&"$BAR_FD"
 }
 
 chat_help() {
@@ -2531,6 +2637,18 @@ chat_prompt() {
   printf -v "$_out" '%s' "$_p"
 }
 
+# Whether more of a paste is waiting: at once, or after a moment, since over
+# ssh or from tmux a paste can arrive in pieces. Nobody types the next line
+# that fast. The terminal does not echo in that moment, or a piece arriving
+# in it would show twice.
+chat_more_pasted() {
+  read -r -t 0 && return 0
+  if [[ -n "$CHAT_STTY" ]]; then stty -echo 2> /dev/null || true; fi
+  sleep 0.1
+  if [[ -n "$CHAT_STTY" ]]; then stty "$CHAT_STTY" 2> /dev/null || true; fi
+  read -r -t 0
+}
+
 # The chat: read questions at a "> " prompt and ask each one in the same
 # conversation. Ctrl-D, exit or quit ends it; \e opens the editor; lines
 # starting with a /command go to chat_command.
@@ -2574,7 +2692,7 @@ chat_loop() {
     pasted=0
     if ((rc == 0)) && [[ -t 0 ]]; then
       CHAT_TAB_LITERAL=1
-      while read -r -t 0; do
+      while chat_more_pasted; do
         more=""
         chat_read more "$cont" || break
         line+=$'\n'"$more"
@@ -2614,8 +2732,10 @@ chat_loop() {
     rc=0
     ask_once "$line" || rc=$?
     if ((rc != 130)); then LAST_TURN_STATUS=$rc; fi
-    printf '\n'
+    printf '\n' >&"$BAR_FD"
   done
+  # Or bash goes on recording the rest of this script as it reads it
+  set +o history
 }
 
 # ---------------------------------------------------------------------------
@@ -2627,14 +2747,20 @@ if [[ -n "$TMUX_MODE" ]]; then
 fi
 
 require_cmds "$CLAUDE_BIN"
-mkdir -p "$SESSION_DIR"
+# Private when created here; the default directory is tightened if it exists,
+# one the user chose is left as it is
+(
+  umask 077
+  mkdir -p "$SESSION_DIR"
+)
+if [[ "$SESSION_DIR" == "$DEFAULT_SESSION_DIR" ]]; then chmod 700 "$SESSION_DIR"; fi
 
 RAW_JSON="$RUN_DIR/stream.jsonl"
 CLAUDE_STDERR="$RUN_DIR/claude.stderr"
 
 if [[ "$RESUME" -eq 1 ]]; then
   resume_session || exit 1
-  printf '\n'
+  printf '\n' >&"$BAR_FD"
 fi
 
 if [[ -n "$question" ]]; then

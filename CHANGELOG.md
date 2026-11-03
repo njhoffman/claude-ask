@@ -6,6 +6,46 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-03
+
+### Changed
+
+- When stdout is not a terminal it gets only the answer, ending in a newline:
+  no status bar, cursor moves or colors, and no default pager (a `--pager` you
+  give still runs). The status bar goes to stderr if that is a terminal. `-r`
+  does not replay the last answer into a file.
+- Piped input is added after a question given on the command line, instead of
+  being ignored. A stdin that does not end is waited for, with a note after 2s
+  (`< /dev/null` skips it).
+- `-i` with piped input asks one question and chats on the terminal, and is
+  refused when there is none. It used to ask one question per line of the pipe.
+- A saved answer, `--session` and `/yank` hold every message of the answer, as
+  shown, not only the last one.
+- `CLAUDE_ASK_FORCE_INTERACTIVE` is for the tests' chats; `CLAUDE_ASK_FORCE_TTY`
+  is new, for tests that look at the bar.
+
+### Added
+
+- `NO_COLOR` is honored.
+
+### Fixed
+
+- Text after a wrapped line or wide characters no longer lands in the wrong
+  place or overwrites what is there, and the end of a long status bar line is no
+  longer left beside the text written over it.
+- Messages of one answer are separated by a blank line instead of running
+  together (`Let me check that.The answer is 42.`).
+- Control characters in answers and questions, except tab and newline, are
+  removed before they reach the terminal or the clipboard, so an escape sequence
+  in an answer cannot set the clipboard or the title.
+- A paste that arrives in pieces (ssh, tmux) is one question: the chat waits
+  0.1s for more after each line.
+- Lines of the script no longer end up in the chat history. Remove any already
+  there from `~/.local/state/claude-ask/history`: they read
+  `if [[ "$LAST_TURN_STATUS" -ne 0 ]]; then   exit 1; fi` and `exit 0`.
+- Session files are private (`0600`, also `--save-raw`, and existing ones when
+  next written), and so are a new session directory and the default one (`0700`).
+
 ## [0.8.2] - 2026-11-03
 
 ### Fixed
