@@ -113,11 +113,11 @@ Reviewed: 2026-11-03
   events). Run one long-lived `jq --unbuffered` over the whole stream (a
   coprocess fed each line, or reading claude's output directly and emitting the
   NUL-separated fields) and read its records instead of starting `jq` per line.
-- [ ] **Resume or chat in a chosen session, not only the newest.** (p3)
+- [x] **Resume or chat in a chosen session, not only the newest.** (p3)
   [feature] `-r` always takes the newest session file. Let `--session ID|N`
   combine with `-r` or `-i` (or give `-r` an optional `ID|N`) to continue an
   older conversation, reusing `view_session`'s lookup by index, name and prefix.
-- [ ] **The chat prompt cannot take a multi-line paste.** (p3) [feature]
+- [x] **The chat prompt cannot take a multi-line paste.** (p3) [feature]
   Pasting several lines at the `> ` prompt sends each line as its own question.
   Bracketed paste does not help: it is already on by default (readline 8.1+),
   and a test under a pseudo-terminal shows `read -e` still returns at the
@@ -140,17 +140,20 @@ Reviewed: 2026-11-03
   fails the same way until `/model default`. On an `assistant` event with
   `error: "model_not_found"`, restore the previous model and say so, or at
   least hint at `/model` in the chat.
-- [ ] **The chat prompt does not show the model or effort.** (p3) [feature]
+- [x] **The chat prompt does not show the model or effort.** (p3) [feature]
   The status bar appears only while an answer streams, so after `/effort` or
   `/model` nothing on screen shows the current setting until the next answer.
   Put a short form in the prompt (`opus 5.5 · high > `), dim, or print it
   after each change (already done) and at chat start next to the `/help`
   hint.
-- [ ] **Tab completion for chat commands.** (p3) [feature] `read -e` completes
-  file names, so `/ef<Tab>` does nothing useful. Bind completion for the
-  `/word` commands and their arguments (effort levels, themes, model aliases)
-  if bash's `read -e` can use it (`bind -x` or `complete -I` in bash 5), or
-  note that it cannot.
+- [ ] **Tab completion for chat commands.** (p3) [feature] Since 0.7.0 Tab
+  at the chat prompt inserts a tab (`chat_inputrc`), so a Tab in pasted code
+  is kept now that bracketed paste is off; completion needs another key.
+  Bind one (say `M-/` or a second Tab press) to complete the `/word`
+  commands and their arguments (effort levels, themes, model aliases), if a
+  non-interactive `read -e` can run it (`bind -x` does not take effect in a
+  script; a readline macro in the INPUTRC file might), or note that it
+  cannot.
 - [ ] **Shell completion for the options.** (p3) [feature] No bash or zsh
   completion for `--theme`, `-e`, `-m`, `--session` (session names) and the
   rest. Add `completions/_claude-ask` (zsh) and a bash one, installed by

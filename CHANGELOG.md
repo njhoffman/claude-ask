@@ -6,6 +6,26 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-03
+
+### Added
+
+- `--resume=ID|N` continues a chosen session, found the same way as
+  `--session` (a `--history` number, a name or a unique prefix); `-r` alone
+  still takes the newest.
+- The chat prompt shows the model and effort, e.g. `opus 5.5 · high > `:
+  the model that answered last (or the one `-m` / `/model` asks for until
+  it answers) and the effort when one is set.
+- A multi-line paste at the chat prompt is one question; its lines show at
+  a `. ` prompt. Before, only the first line was asked and the rest was
+  lost.
+
+### Changed
+
+- At the chat prompt Tab inserts a tab instead of completing a file name,
+  so pasted code keeps its tabs, and bracketed paste is off (the chat uses
+  its own readline settings after your `~/.inputrc`).
+
 ## [0.6.2] - 2026-11-03
 
 ### Fixed

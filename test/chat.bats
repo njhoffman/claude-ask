@@ -239,3 +239,67 @@ old_session() {
   chat "one" "two"
   [ "$(grep -c '"type":"result"' "$SESSION_DIR/one.jsonl")" -eq 2 ]
 }
+
+# ---------------------------------------------------------------------------
+# --resume=ID|N
+# ---------------------------------------------------------------------------
+@test "--resume=N continues the Nth newest session, not the newest" {
+  unset CLAUDE_ASK_FORCE_INTERACTIVE
+  old_session older 60
+  old_session newest 5
+  run "$SCRIPT_PATH" --no-pager --resume=2 "follow up" < /dev/null
+  [ "$status" -eq 0 ]
+  grep -q -- "--resume old-older | follow up" "$CLAUDE_STUB_LOG"
+  [ "$(jq -r '.turn_count' "$SESSION_DIR/older.json")" = "2" ]
+  [ "$(jq -r '.turn_count // 1' "$SESSION_DIR/newest.json")" = "1" ]
+}
+
+@test "--resume=NAME and --resume=PREFIX find the session" {
+  unset CLAUDE_ASK_FORCE_INTERACTIVE
+  old_session git-bare-repo 60
+  old_session newest 5
+  run "$SCRIPT_PATH" --no-pager --resume=git-bare-repo "q1" < /dev/null
+  [ "$status" -eq 0 ]
+  run "$SCRIPT_PATH" --no-pager --resume=git-ba "q2" < /dev/null
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '[.turns[].question] | join(",")' "$SESSION_DIR/git-bare-repo.json")" = "question git-bare-repo,q1,q2" ]
+}
+
+@test "--resume= chats in the chosen session without a question" {
+  old_session older 60
+  old_session newest 5
+  CHAT_ARGS=(--resume=older)
+  chat "one"
+  [ "$status" -eq 0 ]
+  output_clean=$(echo "$output" | strip_ansi)
+  [[ "$output_clean" == *"resuming older (1 turn"* ]]
+  sed -n 1p "$CLAUDE_STUB_LOG" | grep -q -- "--resume old-older | one"
+}
+
+@test "--resume= with an unknown or ambiguous session is an error" {
+  unset CLAUDE_ASK_FORCE_INTERACTIVE
+  old_session git-one 60
+  old_session git-two 5
+  run "$SCRIPT_PATH" --no-pager --resume=nothing "q" < /dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no session nothing (--history lists them)"* ]]
+  run "$SCRIPT_PATH" --no-pager --resume=git "q" < /dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Ambiguous session name 'git'"* ]]
+  [ ! -s "$CLAUDE_STUB_LOG" ]
+}
+
+@test "--resume= needs a session" {
+  run "$SCRIPT_PATH" --resume= "q"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--resume= takes a session name or number"* ]]
+}
+
+@test "--resume= is passed on by --split" {
+  export PATH="$STUB_DIR:$PATH" TMUX="/tmp/fake,1,0" CLAUDE_STUB_TMUX_LOG="$TEST_TEMP_DIR/tmux"
+  unset CLAUDE_ASK_FORCE_INTERACTIVE
+  run "$SCRIPT_PATH" --split --resume=3 "q"
+  grep -q -- " --resume=3 -i$" "$CLAUDE_STUB_TMUX_LOG"
+  run "$SCRIPT_PATH" --split -r "q"
+  grep -q -- " -r -i$" "$CLAUDE_STUB_TMUX_LOG"
+}

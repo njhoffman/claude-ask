@@ -30,8 +30,14 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Chat and resume**: `ask_once` runs one turn (stream, save, report);
   `chat_loop` reads `> ` prompts and calls it; `CONV_*` holds the
   conversation (session file, claude session id for `--resume`, turns, total
-  cost). `-r` loads the newest session file. No question + a terminal on
+  cost). `-r` loads the newest session file, `--resume=ID|N` the one
+  `find_session` finds (shared with `--session`). No question + a terminal on
   stdin means chat; `CLAUDE_ASK_FORCE_INTERACTIVE` lets tests chat over a pipe.
+  `chat_prompt` puts `LAST_MODEL` (or `MODEL`) and `EFFORT` in the prompt;
+  `chat_inputrc` gives readline bracketed paste off and Tab as tab-insert,
+  and `chat_loop` gathers pasted lines already waiting into one question
+  (at a terminal only). `test/chat_terminal.bats` drives a pseudo-terminal
+  with `test/helpers/pty_run.py`.
   `chat_command` runs the `/word` commands (`/help`, `/effort`, `/model`,
   `/theme`, `/status`, `/new`, `/exit`); a first word that is not `/[a-z]+`
   is a question.

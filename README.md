@@ -12,6 +12,7 @@ claude-ask                               # chat: a "> " prompt after each answer
 claude-ask -i "Explain git rebase"       # ask, then keep chatting
 claude-ask -r "And with --onto?"         # follow up in the most recent session
 claude-ask -r                            # continue the most recent session as a chat
+claude-ask --resume=3                    # continue the third newest (or --resume=NAME)
 git diff | claude-ask                    # piped input is the question
 claude-ask --theme powerline "..."       # minimal | bubbles | powerline
 claude-ask -e high -m sonnet "..."       # effort level and model
@@ -54,6 +55,12 @@ from the right (done, duration, cost, tokens); `CLAUDE_ASK_COLUMNS` sets the
 width it is fitted to.
 
 ## Chat commands
+
+The prompt shows the model and the effort level, e.g. `opus 5.5 · high > `:
+the model that answered last, or the one `-m` or `/model` asks for until it
+answers. A multi-line paste is asked as one question (its lines show at a
+`. ` prompt); for that the chat turns bracketed paste off and makes Tab
+insert a tab, on top of your own readline settings.
 
 In a chat, these commands work at the prompt:
 

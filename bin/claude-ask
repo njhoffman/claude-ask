@@ -18,6 +18,8 @@
 #   -r, --resume       Continue the most recent saved session (with a
 #                      question: ask it there; without: chat there); it keeps
 #                      the session's effort and model unless -e or -m is given
+#   --resume=ID|N      The same for the session that ID or N names (as for
+#                      --session: a --history number, a name or a prefix)
 #   -e, --effort LEVEL Effort (thinking) level: low, medium, high, xhigh, max
 #                      (default: claude's own, from its settings)
 #   -m, --model MODEL  Model alias (opus, sonnet, haiku, fable) or full name
@@ -53,6 +55,7 @@
 #   claude-ask -i "Explain git rebase"            # answer, then keep chatting
 #   claude-ask -r "And with --onto?"              # follow up in the last session
 #   claude-ask -r                                 # continue the last session as a chat
+#   claude-ask --resume=3                         # chat in the third newest session
 #   claude-ask -e high -m sonnet "Review this design"
 #   claude-ask -Y "A bash loop over lines of a file"  # copy the code
 #   claude-ask -y                                 # copy the last answer
@@ -111,6 +114,7 @@ SHOW_HISTORY=0
 VIEW_SESSION=""
 INTERACTIVE=0
 RESUME=0
+RESUME_ARG="" # --resume=ID|N: the session to continue (empty: the newest)
 DEBUG_LOG=""
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-ask"
 DEFAULT_DEBUG_LOG="$STATE_DIR/debug.log"
@@ -246,6 +250,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     -r | --resume)
       RESUME=1
+      shift
+      ;;
+    --resume=*)
+      RESUME=1
+      RESUME_ARG="${1#--resume=}"
+      if [[ -z "$RESUME_ARG" ]]; then
+        echo "Error: --resume= takes a session name or number" >&2
+        exit 1
+      fi
       shift
       ;;
     --demo-themes)
@@ -1580,6 +1593,43 @@ show_history() {
   done
 }
 
+# find_session ID|N: set FOUND_SESSION to the session file that ID names: a
+# number is an index into --history (newest first), else a name, else a
+# unique name prefix. Returns 1 when none matches, 2 when the prefix is
+# ambiguous (the matches are listed on stderr).
+find_session() {
+  local arg="$1" f files=() matches=()
+  FOUND_SESSION=""
+  if [[ "$arg" =~ ^[0-9]+$ ]]; then
+    while IFS= read -r f; do
+      [[ -n "$f" ]] && files+=("$f")
+    done < <(ls -t "$SESSION_DIR"/*.json 2> /dev/null)
+    if ((arg >= 1 && arg <= ${#files[@]})); then
+      FOUND_SESSION="${files[arg - 1]}"
+      return 0
+    fi
+  fi
+  if [[ -f "${SESSION_DIR}/${arg}.json" ]]; then
+    FOUND_SESSION="${SESSION_DIR}/${arg}.json"
+    return 0
+  fi
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && matches+=("$f")
+  done < <(ls "${SESSION_DIR}/${arg}"*.json 2> /dev/null)
+  if ((${#matches[@]} == 1)); then
+    FOUND_SESSION="${matches[0]}"
+    return 0
+  fi
+  if ((${#matches[@]} > 1)); then
+    echo "Ambiguous session name '${arg}'. Matches:" >&2
+    for f in "${matches[@]}"; do
+      echo "  $(basename "$f" .json)" >&2
+    done
+    return 2
+  fi
+  return 1
+}
+
 view_session() {
   local arg="$1"
   local session_dir="${SESSION_DIR}"
@@ -1589,42 +1639,10 @@ view_session() {
     return
   fi
 
-  local session_file=""
-
-  # Check if arg is a numeric index
-  if [[ "$arg" =~ ^[0-9]+$ ]]; then
-    local files=()
-    while IFS= read -r f; do
-      [[ -n "$f" ]] && files+=("$f")
-    done < <(ls -t "$session_dir"/*.json 2> /dev/null)
-
-    local idx=$((arg))
-    if [[ $idx -ge 1 && $idx -le ${#files[@]} ]]; then
-      session_file="${files[$((idx - 1))]}"
-    fi
-  fi
-
-  # If not found by index, try as name/id
-  if [[ -z "$session_file" ]]; then
-    if [[ -f "${session_dir}/${arg}.json" ]]; then
-      session_file="${session_dir}/${arg}.json"
-    else
-      # Try prefix match
-      local matches=()
-      while IFS= read -r f; do
-        [[ -n "$f" ]] && matches+=("$f")
-      done < <(ls "${session_dir}/${arg}"*.json 2> /dev/null)
-      if [[ ${#matches[@]} -eq 1 ]]; then
-        session_file="${matches[0]}"
-      elif [[ ${#matches[@]} -gt 1 ]]; then
-        echo "Ambiguous session name '${arg}'. Matches:" >&2
-        for m in "${matches[@]}"; do
-          echo "  $(basename "$m" .json)" >&2
-        done
-        return 1
-      fi
-    fi
-  fi
+  local session_file="" rc=0
+  find_session "$arg" || rc=$?
+  if ((rc == 2)); then return 1; fi
+  session_file="$FOUND_SESSION"
 
   if [[ -z "$session_file" || ! -f "$session_file" ]]; then
     echo "Session not found: ${arg}" >&2
@@ -1948,6 +1966,10 @@ MODEL_GOOD=""
 MODEL_RESTORED=0
 # The conversation's last answer, for /yank
 LAST_ANSWER=""
+# The model of the last answer (short name) and the -m or /model it was
+# asked with, for the chat prompt
+LAST_MODEL=""
+LAST_MODEL_FOR=""
 
 # ask_once QUESTION: stream one answer, continuing the conversation when
 # there is one, and save the turn. Returns 0, 1 when claude failed, or 130
@@ -2067,6 +2089,8 @@ ask_once() {
   MODEL_GOOD="$MODEL"
   MODEL_RESTORED=0
   LAST_ANSWER="${result_text:-$answer_text}"
+  LAST_MODEL="$model"
+  LAST_MODEL_FOR="$MODEL"
   # -y/-Y copy every new answer; a failed copy is reported, the turn is fine
   if [[ -n "$YANK" ]]; then
     yank_answer "$LAST_ANSWER" "$YANK" "$YANK_CODE_N" || true
@@ -2110,7 +2134,11 @@ launch_in_tmux() {
   if [[ "$STREAM_OUTPUT" -eq 0 ]]; then child+=(--no-stream); fi
   if [[ "$SAVE_RAW" -eq 1 ]]; then child+=(--save-raw); fi
   if [[ -n "$DEBUG_LOG" ]]; then child+=("--debug-log=$DEBUG_LOG"); fi
-  if [[ "$RESUME" -eq 1 ]]; then child+=(-r); fi
+  if [[ -n "$RESUME_ARG" ]]; then
+    child+=("--resume=$RESUME_ARG")
+  elif [[ "$RESUME" -eq 1 ]]; then
+    child+=(-r)
+  fi
   case "$YANK" in
     answer) child+=(--yank) ;;
     code) child+=("--yank-code${YANK_CODE_N:+=$YANK_CODE_N}") ;;
@@ -2158,20 +2186,30 @@ launch_in_tmux() {
   fi
 }
 
-# Continue the newest saved session: load it into the CONV_* state and show
-# where it left off (a header and the last turn)
-resume_newest() {
-  local file fields=() total="" header
-  file=$(newest_session_file)
-  if [[ -z "$file" ]]; then
-    echo "claude-ask: no saved session to resume" >&2
-    return 1
+# Continue a saved session, --resume=ID|N's or the newest: load it into the
+# CONV_* state and show where it left off (a header and the last turn)
+resume_session() {
+  local file fields=() total="" header rc=0
+  if [[ -n "$RESUME_ARG" ]]; then
+    find_session "$RESUME_ARG" || rc=$?
+    if ((rc == 1)); then
+      echo "claude-ask: no session $RESUME_ARG (--history lists them)" >&2
+    fi
+    if ((rc != 0)); then return 1; fi
+    file="$FOUND_SESSION"
+  else
+    file=$(newest_session_file)
+    if [[ -z "$file" ]]; then
+      echo "claude-ask: no saved session to resume" >&2
+      return 1
+    fi
   fi
 
   mapfile -d '' -t fields < <(jq -j "${SESSION_TURNS_JQ}"'
     (turns_of | last) as $last
     | [(.session_id // ""), (turns_of | length), (.cost_usd // ""), (.cwd // ""),
-       ($last.effort // ""), ($last.model_option // ""), ($last.answer // "")]
+       ($last.effort // ""), ($last.model_option // ""), ($last.answer // ""),
+       ($last.model // .model // "")]
     | map(tostring + "\u0000") | add' "$file")
   if [[ -z "${fields[0]:-}" ]]; then
     echo "claude-ask: $(basename "$file" .json) has no session id and cannot be resumed" >&2
@@ -2184,6 +2222,8 @@ resume_newest() {
   # -e, -m and the environment win over what the session was last asked with
   if [[ -z "$EFFORT" ]]; then EFFORT="${fields[4]:-}"; fi
   LAST_ANSWER="${fields[6]:-}"
+  if [[ -n "${fields[7]:-}" ]]; then LAST_MODEL=$(short_model_name "${fields[7]}"); fi
+  LAST_MODEL_FOR="${fields[5]:-}"
   if [[ -z "$MODEL" && -n "${fields[5]:-}" ]]; then
     MODEL="${fields[5]}"
     MODEL_RESTORED=1
@@ -2315,13 +2355,49 @@ chat_command() {
   return 0
 }
 
+# The chat prompt's readline settings, in a file INPUTRC points at: the
+# user's own (INPUTRC, ~/.inputrc or /etc/inputrc) and then two of ours.
+# Bracketed paste is off: with it on, read -e keeps the first line of a
+# multi-line paste and drops the rest, while without it each pasted line is
+# read on its own and chat_loop gathers them into one question. Tab inserts
+# a tab, so one in pasted code is not taken for file name completion.
+chat_inputrc() {
+  local f="$RUN_DIR/inputrc" own="${INPUTRC:-$HOME/.inputrc}"
+  if [[ ! -r "$own" ]]; then own=/etc/inputrc; fi
+  {
+    # shellcheck disable=SC2016 # $include is readline's, not a variable
+    if [[ -r "$own" ]]; then printf '$include %s\n' "$own"; fi
+    printf '%s\n' 'set enable-bracketed-paste off' '"\t": tab-insert'
+  } > "$f"
+  INPUTRC="$f"
+}
+
+# OUT: the chat prompt, "opus 5.5 · high > ", with what is known in front,
+# dim: the model of the last answer when it was asked with the current -m or
+# /model (or both are the default), else the model asked for; the effort
+# when one is set. Before anything is known it is just "> ".
+chat_prompt() {
+  local _out="$1" _m="" _label="" _p=""
+  if [[ -n "$LAST_MODEL" && "$MODEL" == "$LAST_MODEL_FOR" ]]; then
+    _m="$LAST_MODEL"
+  elif [[ -n "$MODEL" ]]; then
+    _m=$(short_model_name "$MODEL")
+  fi
+  _label="$_m"
+  if [[ -n "$EFFORT" ]]; then _label+="${_label:+ · }$EFFORT"; fi
+  # \001 and \002 tell readline the color codes take no width
+  if [[ -n "$_label" ]]; then _p=$'\001'"${FG_DIM}"$'\002'"$_label "; fi
+  _p+=$'\001'"${FG_CLAUDE}"$'\002''> '$'\001'"${RST}"$'\002'
+  printf -v "$_out" '%s' "$_p"
+}
+
 # The chat: read questions at a "> " prompt and ask each one in the same
 # conversation. Ctrl-D, exit or quit ends it; \e opens the editor; lines
 # starting with a /command go to chat_command.
 chat_loop() {
-  local line rc eof=0 trimmed
-  # \001 and \002 tell readline the color codes take no width
-  local prompt=$'\001'"${FG_CLAUDE}"$'\002''> '$'\001'"${RST}"$'\002'
+  local line rc eof=0 trimmed prompt more pasted
+  local cont=$'\001'"${FG_DIM}"$'\002''. '$'\001'"${RST}"$'\002'
+  chat_inputrc
 
   mkdir -p "$STATE_DIR"
   HISTFILE="$CHAT_HISTORY_FILE"
@@ -2335,6 +2411,7 @@ chat_loop() {
     line=""
     rc=0
     TURN_INTERRUPTED=0
+    chat_prompt prompt
     IFS= read -r -e -p "$prompt" line || rc=$?
     if ((rc > 128 || TURN_INTERRUPTED)); then
       # Ctrl-C at the prompt: drop the line, prompt again
@@ -2350,10 +2427,26 @@ chat_loop() {
       fi
     fi
 
+    # The lines of a paste arrive at once, so any already waiting belong to
+    # the same question (each shows at a ". " prompt). Only at a terminal:
+    # piped chat input is one question per line.
+    pasted=0
+    if ((rc == 0)) && [[ -t 0 ]]; then
+      while read -r -t 0; do
+        more=""
+        IFS= read -r -e -p "$cont" more || break
+        line+=$'\n'"$more"
+        pasted=1
+      done
+    fi
+
     trimmed="${line#"${line%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    if [[ -z "$trimmed" ]]; then continue; fi
+    # A paste is a question, even one that starts with /word or exit
+    if ((pasted)); then trimmed=""; fi
     case "$trimmed" in
-      "") continue ;;
+      "") ;;
       exit | quit) break ;;
       '\e' | /editor)
         compose_in_editor || continue
@@ -2397,7 +2490,7 @@ RAW_JSON="$RUN_DIR/stream.jsonl"
 CLAUDE_STDERR="$RUN_DIR/claude.stderr"
 
 if [[ "$RESUME" -eq 1 ]]; then
-  resume_newest || exit 1
+  resume_session || exit 1
   printf '\n'
 fi
 
