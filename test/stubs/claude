@@ -9,6 +9,8 @@
 #   CLAUDE_STUB_LOG        file that gets one line per call: "args | question"
 #   CLAUDE_STUB_FAIL_CALL  call number (counted in CLAUDE_STUB_LOG) that fails
 #                          with exit 2, no output and "stub failure" on stderr
+#   CLAUDE_STUB_UNKNOWN_MODEL  a --model value the stub does not know: it
+#                          answers like claude (model_not_found.jsonl, exit 1)
 question=$(cat)
 if [[ -n "${CLAUDE_STUB_ARGS:-}" ]]; then
   printf '%s\n' "$@" > "$CLAUDE_STUB_ARGS"
@@ -25,6 +27,14 @@ if [[ -n "${CLAUDE_STUB_FAIL_CALL:-}" && "$call" -eq "$CLAUDE_STUB_FAIL_CALL" ]]
   echo "stub failure" >&2
   exit 2
 fi
+prev=""
+for arg in "$@"; do
+  if [[ "$prev" == --model && -n "${CLAUDE_STUB_UNKNOWN_MODEL:-}" && "$arg" == "$CLAUDE_STUB_UNKNOWN_MODEL" ]]; then
+    sed "s/@MODEL@/$arg/g" "$(dirname "$0")/../fixtures/model_not_found.jsonl"
+    exit 1
+  fi
+  prev="$arg"
+done
 if [[ -n "${CLAUDE_STUB_FIXTURE:-}" ]]; then
   while IFS= read -r line; do
     if [[ -n "${CLAUDE_STUB_DELAY:-}" ]]; then sleep "$CLAUDE_STUB_DELAY"; fi

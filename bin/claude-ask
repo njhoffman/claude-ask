@@ -8,8 +8,9 @@
 # followed by a "> " prompt for the next question in the same conversation.
 # At the prompt, \e composes the question in $EDITOR; /effort [LEVEL] and
 # /model [NAME] show or change the effort level and model for the next
-# questions ("default" clears them); exit, quit or Ctrl-D ends the chat;
-# Ctrl-C stops the current answer. Piped input with no question is read as
+# questions ("default" clears them); /yank [code [N]] copies the last answer
+# or its code blocks; /help lists the rest; exit, quit or Ctrl-D ends the
+# chat; Ctrl-C stops the current answer. Piped input with no question is read as
 # one question.
 #
 # Options:
@@ -20,6 +21,17 @@
 #   -e, --effort LEVEL Effort (thinking) level: low, medium, high, xhigh, max
 #                      (default: claude's own, from its settings)
 #   -m, --model MODEL  Model alias (opus, sonnet, haiku, fable) or full name
+#   -y, --yank         Copy the answer to the clipboard (and a tmux buffer);
+#                      with no question, copy the last answer of the newest
+#                      session (or of --session ID|N) and exit
+#   -Y, --yank-code[=N]  The same for the answer's code blocks (only the Nth)
+#   --split[=h|v]      Run in a new tmux pane, side by side (h) or one above
+#                      the other (v), chosen from the pane's shape by default.
+#                      With a question the answer goes there (and it stays as
+#                      a chat) while you stay here; without, you chat there.
+#   --popup            Run in a tmux popup: a question's answer is paged and
+#                      quitting the pager closes it; without one, a chat
+#                      until /quit
 #   --theme THEME      Status bar theme: minimal, bubbles, powerline (default: minimal)
 #   --pager CMD        Pager command for markdown output, run with bash -c
 #                      (default: nvcat --pager less; plain text if nvcat is missing)
@@ -42,6 +54,10 @@
 #   claude-ask -r "And with --onto?"              # follow up in the last session
 #   claude-ask -r                                 # continue the last session as a chat
 #   claude-ask -e high -m sonnet "Review this design"
+#   claude-ask -Y "A bash loop over lines of a file"  # copy the code
+#   claude-ask -y                                 # copy the last answer
+#   claude-ask --split "Explain this error"        # answer in a new pane
+#   claude-ask --popup                            # chat in a tmux popup
 #   git diff | claude-ask                         # piped input is the question
 #   claude-ask --theme powerline "Explain git rebase"
 #   claude-ask --demo-themes
@@ -59,6 +75,12 @@
 #   CLAUDE_ASK_MODEL   The default model (-m overrides it)
 #   CLAUDE_ASK_DEMO_DELAY  Seconds between demo frames (default: 0.08 themes, 0.03 output)
 #   CLAUDE_ASK_FORCE_INTERACTIVE  Chat even when stdin is not a terminal (tests)
+#   CLAUDE_ASK_COLUMNS  The terminal width the status bar is fitted to
+#                      (default: the terminal's own)
+#   CLAUDE_ASK_CLIPBOARD  Command that copies stdin, run with bash -c
+#                      (default: wl-copy, xclip, xsel or pbcopy)
+#   CLAUDE_ASK_POPUP_SIZE  --popup's size, WIDTH or WIDTHxHEIGHT (default: 80%)
+#   CLAUDE_ASK_POPUP_PAGER  Pager for the answer in --popup (default: less -R -+F)
 
 set -euo pipefail
 
@@ -102,6 +124,14 @@ EFFORT="${CLAUDE_ASK_EFFORT:-}"
 MODEL="${CLAUDE_ASK_MODEL:-}"
 EFFORT_RE='^(low|medium|high|xhigh|max)$'
 EFFORT_LEVELS="low, medium, high, xhigh, max"
+# Terminal width for fitting the status bar (0: unknown, nothing is fitted);
+# read_term_cols sets it, CLAUDE_ASK_COLUMNS overrides it
+TERM_COLS=0
+YANK=""          # answer or code: copy each new answer, or its code blocks
+YANK_CODE_N=""   # with code: only this block
+YANK_PREVIOUS=0  # -y/-Y with no question: copy a saved answer and exit
+TMUX_MODE=""     # split or popup
+SPLIT_DIR="auto" # h, v or auto
 
 # ---------------------------------------------------------------------------
 # Debug logging (must be defined before arg parsing)
@@ -162,6 +192,40 @@ while [[ $# -gt 0 ]]; do
       fi
       MODEL="$2"
       shift 2
+      ;;
+    -y | --yank)
+      YANK=answer
+      shift
+      ;;
+    -Y | --yank-code)
+      YANK=code
+      shift
+      ;;
+    --yank-code=*)
+      YANK=code
+      YANK_CODE_N="${1#--yank-code=}"
+      if [[ ! "$YANK_CODE_N" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: --yank-code=N takes a block number from 1" >&2
+        exit 1
+      fi
+      shift
+      ;;
+    --split)
+      TMUX_MODE="split"
+      shift
+      ;;
+    --split=*)
+      TMUX_MODE="split"
+      SPLIT_DIR="${1#--split=}"
+      if [[ ! "$SPLIT_DIR" =~ ^(h|v|auto)$ ]]; then
+        echo "Error: --split= takes h, v or auto" >&2
+        exit 1
+      fi
+      shift
+      ;;
+    --popup)
+      TMUX_MODE=popup
+      shift
       ;;
     --pager)
       [[ $# -lt 2 ]] && {
@@ -286,10 +350,23 @@ debug_log "args parsed: EFFORT=${EFFORT:-default} MODEL=${MODEL:-default} THEME=
 
 question="${POSITIONAL[*]:-}"
 
+# --split and --popup hand the question to the new claude-ask in a private
+# temp file (a long piped question could be too big for a tmux command)
+if [[ -n "${_CLAUDE_ASK_QUESTION_TMP:-}" ]]; then
+  if [[ -z "$question" && -f "$_CLAUDE_ASK_QUESTION_TMP" ]]; then
+    question=$(< "$_CLAUDE_ASK_QUESTION_TMP")
+  fi
+  rm -f "$_CLAUDE_ASK_QUESTION_TMP"
+  unset _CLAUDE_ASK_QUESTION_TMP
+fi
+
 # Chat when there is no question and a person is typing; piped input with no
-# question is the question itself
+# question is the question itself. -y or -Y with no question and no chat
+# copies a saved answer instead.
 if [[ "$DEMO_THEMES" -eq 0 && "$DEMO_OUTPUT" -eq 0 && "$SHOW_HISTORY" -eq 0 && -z "$VIEW_SESSION" && -z "$question" ]]; then
-  if [[ -t 0 || -n "${CLAUDE_ASK_FORCE_INTERACTIVE:-}" ]]; then
+  if [[ -n "$YANK" && "$INTERACTIVE" -eq 0 && "$RESUME" -eq 0 && (-t 0 || -n "${CLAUDE_ASK_FORCE_INTERACTIVE:-}") ]]; then
+    YANK_PREVIOUS=1
+  elif [[ -t 0 || -n "${CLAUDE_ASK_FORCE_INTERACTIVE:-}" ]]; then
     INTERACTIVE=1
   elif [[ "$INTERACTIVE" -eq 0 ]]; then
     question="$(cat)"
@@ -300,7 +377,18 @@ if [[ "$DEMO_THEMES" -eq 0 && "$DEMO_OUTPUT" -eq 0 && "$SHOW_HISTORY" -eq 0 && -
     fi
   fi
 fi
-debug_log "mode: INTERACTIVE=$INTERACTIVE RESUME=$RESUME question_len=${#question}"
+debug_log "mode: INTERACTIVE=$INTERACTIVE RESUME=$RESUME YANK=${YANK:-none} TMUX_MODE=${TMUX_MODE:-none} question_len=${#question}"
+
+if [[ -n "$TMUX_MODE" ]]; then
+  if [[ "$DEMO_THEMES" -eq 1 || "$DEMO_OUTPUT" -eq 1 || "$SHOW_HISTORY" -eq 1 || -n "$VIEW_SESSION" || "$YANK_PREVIOUS" -eq 1 ]]; then
+    echo "Error: --$TMUX_MODE runs a question or a chat" >&2
+    exit 1
+  fi
+  if [[ -z "${TMUX:-}" ]] || ! command -v tmux > /dev/null 2>&1; then
+    echo "Error: --$TMUX_MODE needs tmux: run it inside a tmux session" >&2
+    exit 1
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # Catppuccin Mocha palette -> ANSI 256/truecolor escape sequences
@@ -464,6 +552,65 @@ render_status_bar() {
   esac
 }
 
+# OUT TEXT: the number of columns TEXT takes, without its "\e[...m" color
+# codes (characters are counted as one column each)
+visible_width() {
+  local _out="$1" _s="$2" _pre _rest
+  while [[ "$_s" == *$'\e['* ]]; do
+    _pre="${_s%%$'\e['*}"
+    _rest="${_s#*$'\e['}"
+    _rest="${_rest#*m}"
+    _s="$_pre$_rest"
+  done
+  printf -v "$_out" '%d' "${#_s}"
+}
+
+# OUT TEXT: the terminal rows TEXT takes once it wraps at TERM_COLS
+text_rows() {
+  local _out="$1" _w
+  visible_width _w "$2"
+  if ((TERM_COLS > 0 && _w > TERM_COLS)); then
+    printf -v "$_out" '%d' "$(((_w + TERM_COLS - 1) / TERM_COLS))"
+  else
+    printf -v "$_out" '%d' 1
+  fi
+}
+
+# Same arguments as render_status_bar, but the bar is fitted to TERM_COLS by
+# leaving out segments from the right: "done", then the duration, the cost
+# and the tokens. The spinner and model segment always stay (and may still
+# wrap in a very narrow terminal).
+render_status_bar_fitted() {
+  local _out="$1" _spin="$2" _model="$3" _tok_in="$4" _tok_out="$5" _cost="$6" _dur="$7" _status="$8"
+  local _bar _w _step
+  for _step in 0 1 2 3 4; do
+    case "$_step" in
+      1) if [[ "$_status" == "done" ]]; then _status="ended"; else continue; fi ;;
+      2) if [[ -n "$_dur" ]]; then _dur=""; else continue; fi ;;
+      3) if [[ -n "$_cost" ]]; then _cost=""; else continue; fi ;;
+      4) if [[ -n "$_tok_in$_tok_out" ]]; then _tok_in="" _tok_out=""; else continue; fi ;;
+    esac
+    render_status_bar _bar "$_spin" "$_model" "$_tok_in" "$_tok_out" "$_cost" "$_dur" "$_status"
+    ((TERM_COLS > 0)) || break
+    visible_width _w "$_bar"
+    ((_w > TERM_COLS)) || break
+  done
+  printf -v "$_out" '%s' "$_bar"
+}
+
+# Set TERM_COLS: CLAUDE_ASK_COLUMNS, else the terminal's width, else COLUMNS
+read_term_cols() {
+  local size
+  if [[ -n "${CLAUDE_ASK_COLUMNS:-}" ]]; then
+    TERM_COLS="$CLAUDE_ASK_COLUMNS"
+  elif size=$(stty size < /dev/tty 2> /dev/null); then
+    TERM_COLS="${size#* }"
+  else
+    TERM_COLS="${COLUMNS:-0}"
+  fi
+  [[ "$TERM_COLS" =~ ^[0-9]+$ ]] || TERM_COLS=0
+}
+
 # OUT N DIV: N / DIV with one decimal, truncated ("19.9" for 19900 / 1000),
 # in integer arithmetic; this is what bc with scale=1 used to produce
 _one_decimal() {
@@ -597,8 +744,10 @@ reset_stream_state() {
   cost=""
   duration_ms=""
   answer_text=""
+  result_text="" # the result event's text: the whole final answer
   status="running" # running, done or error
   stream_error=""
+  api_error="" # an assistant event's error code, e.g. model_not_found
   is_thinking=0
   answer_lines=0
   answer_chars=0
@@ -609,7 +758,7 @@ reset_stream_state() {
 # One jq call per event. The fields come back NUL-terminated, so text may
 # hold any character: type, model, session_id, text (every text block
 # joined), has_thinking, input tokens, output tokens, cost, duration_ms,
-# is_error, result text.
+# is_error, result text, error (an assistant event's error code).
 # shellcheck disable=SC2016 # $u is a jq variable
 STREAM_FIELDS_JQ='
   (if .type == "result" then .usage else .message.usage end) as $u
@@ -618,9 +767,10 @@ STREAM_FIELDS_JQ='
       (if any(.message.content[]?; .type == "thinking") then 1 else 0 end),
       $u.input_tokens, $u.output_tokens, .total_cost_usd, .duration_ms,
       (if .is_error == true then 1 else 0 end),
-      (if .type == "result" then .result else null end) ]
+      (if .type == "result" then .result else null end),
+      (if .type == "assistant" then .error else null end) ]
   | map((. // "" | tostring) + "\u0000") | add'
-STREAM_FIELD_COUNT=11
+STREAM_FIELD_COUNT=12
 
 # Parse one stream-json line into the state variables. CHUNK is set to the
 # answer text the line added (empty if none). Returns 1 for lines that change
@@ -638,7 +788,12 @@ process_stream_line() {
       if [[ -n "${f[2]}" ]]; then session_id="${f[2]}"; fi
       ;;
     assistant)
-      if [[ -n "${f[3]}" ]]; then
+      if [[ -n "${f[11]}" ]]; then
+        # An API error (unknown model, auth, ...): its text is the error
+        # message, not part of the answer
+        api_error="${f[11]}"
+        stream_error="${f[3]:-$api_error}"
+      elif [[ -n "${f[3]}" ]]; then
         is_thinking=0
         CHUNK="${f[3]}"
         answer_text+="$CHUNK"
@@ -652,6 +807,7 @@ process_stream_line() {
       ;;
     result)
       status="done"
+      result_text="${f[10]}"
       if [[ -n "${f[7]}" ]]; then cost="${f[7]}"; fi
       if [[ -n "${f[8]}" ]]; then duration_ms="${f[8]}"; fi
       if [[ "${f[9]}" == 1 ]]; then
@@ -686,6 +842,138 @@ run_pager() {
   else
     bash -c "$PAGER_CMD"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# Yanking: copy an answer, or its code blocks, to the clipboard
+# ---------------------------------------------------------------------------
+# Set CODE_BLOCKS to TEXT's fenced code blocks (``` or ~~~, indented up to
+# three spaces), without the fence lines. A block closes at a fence of the
+# same character at least as long; one still open at the end runs to it.
+extract_code_blocks() {
+  local line fence="" block="" open=0
+  local re_open='^ {0,3}(```+|~~~+)'
+  local re_close='^ {0,3}(```+|~~~+)[[:space:]]*$'
+  CODE_BLOCKS=()
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if ((open)); then
+      if [[ "$line" =~ $re_close && "${BASH_REMATCH[1]:0:1}" == "${fence:0:1}" && ${#BASH_REMATCH[1]} -ge ${#fence} ]]; then
+        CODE_BLOCKS+=("$block")
+        open=0
+      else
+        block+="$line"$'\n'
+      fi
+    elif [[ "$line" =~ $re_open ]]; then
+      fence="${BASH_REMATCH[1]}"
+      block=""
+      open=1
+    fi
+  done <<< "$1"
+  if ((open)); then CODE_BLOCKS+=("$block"); fi
+}
+
+# Set CLIP_CMD to the command that copies stdin to the clipboard:
+# CLAUDE_ASK_CLIPBOARD, else wl-copy (Wayland), xclip or xsel (X11), pbcopy.
+# Returns 1 when there is none.
+clipboard_cmd() {
+  CLIP_CMD="${CLAUDE_ASK_CLIPBOARD:-}"
+  if [[ -z "$CLIP_CMD" ]]; then
+    if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-copy > /dev/null 2>&1; then
+      CLIP_CMD="wl-copy"
+    elif [[ -n "${DISPLAY:-}" ]] && command -v xclip > /dev/null 2>&1; then
+      CLIP_CMD="xclip -selection clipboard"
+    elif [[ -n "${DISPLAY:-}" ]] && command -v xsel > /dev/null 2>&1; then
+      CLIP_CMD="xsel --clipboard --input"
+    elif command -v pbcopy > /dev/null 2>&1; then
+      CLIP_CMD="pbcopy"
+    fi
+  fi
+  [[ -n "$CLIP_CMD" ]]
+}
+
+# yank_text TEXT WHAT: copy TEXT to the clipboard and, inside tmux, a tmux
+# buffer, and say so on stderr ("yanked WHAT (N lines) to ...")
+yank_text() {
+  local text="$1" what="$2" to=() newlines
+  # The clipboard tool's output goes nowhere: xclip and wl-copy stay behind
+  # to serve the selection and would hold a pipe open
+  if clipboard_cmd && printf '%s' "$text" | bash -c "$CLIP_CMD" > /dev/null 2>&1; then
+    to+=("the clipboard")
+  fi
+  if [[ -n "${TMUX:-}" ]] && printf '%s' "$text" | tmux load-buffer - > /dev/null 2>&1; then
+    to+=("a tmux buffer")
+  fi
+  if ((${#to[@]} == 0)); then
+    echo "claude-ask: nowhere to yank to: no clipboard command worked (set CLAUDE_ASK_CLIPBOARD) and not in tmux" >&2
+    return 1
+  fi
+  newlines="${text//[!$'\n']/}"
+  printf '%syanked %s (%d lines) to %s%s\n' "$FG_DIM" "$what" "$((${#newlines} + 1))" \
+    "${to[0]}${to[1]:+ and ${to[1]}}" "$RST" >&2
+}
+
+# yank_answer ANSWER answer|code [N]: copy the answer, all its code blocks
+# (a blank line between them) or only the Nth. The last newline is left
+# off, so a pasted command does not run before it can be read.
+yank_answer() {
+  local answer="$1" mode="$2" n="${3:-}" text="" what block count
+  if [[ -z "$answer" ]]; then
+    echo "claude-ask: there is no answer to yank" >&2
+    return 1
+  fi
+  if [[ "$mode" == code ]]; then
+    extract_code_blocks "$answer"
+    count=${#CODE_BLOCKS[@]}
+    if ((count == 0)); then
+      echo "claude-ask: the answer has no code blocks" >&2
+      return 1
+    fi
+    if [[ -n "$n" ]]; then
+      if ((n < 1 || n > count)); then
+        echo "claude-ask: there is no code block $n (the answer has $count)" >&2
+        return 1
+      fi
+      text="${CODE_BLOCKS[n - 1]}"
+      what="code block $n of $count"
+    else
+      for block in "${CODE_BLOCKS[@]}"; do
+        text+="${text:+$'\n'}$block"
+      done
+      what="$count code block"
+      if ((count != 1)); then what+="s"; fi
+    fi
+  else
+    text="$answer"
+    what="the answer"
+  fi
+  while [[ "$text" == *$'\n' ]]; do text="${text%$'\n'}"; done
+  yank_text "$text" "$what"
+}
+
+# yank_session_file FILE: yank_answer with the session's last answer and
+# the -y/-Y choice
+yank_session_file() {
+  local answer
+  answer=$(jq -r '.answer // empty' "$1")
+  yank_answer "$answer" "$YANK" "$YANK_CODE_N"
+}
+
+# The newest session file, or nothing when there is none
+newest_session_file() {
+  local f
+  while IFS= read -r f; do
+    if [[ -n "$f" ]]; then
+      printf '%s' "$f"
+      return
+    fi
+  done < <(ls -t "$SESSION_DIR"/*.json 2> /dev/null)
+}
+
+# split_direction WIDTH HEIGHT: "h" (side by side) when the pane is more than
+# twice as wide as it is tall (a cell is about half as wide as it is tall)
+# and each half keeps 80 columns, else "v" (one above the other)
+split_direction() {
+  if (($1 > 2 * $2 && $1 / 2 >= 80)); then printf h; else printf v; fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1260,6 +1548,10 @@ view_session() {
     return 1
   fi
 
+  if [[ -n "$YANK" ]]; then
+    yank_session_file "$session_file"
+    return
+  fi
   debug_log "viewing session: $session_file"
   show_turns "$session_file" all
 }
@@ -1268,6 +1560,7 @@ view_session() {
 # answer through the pager)
 show_turns() {
   local file="$1" which="$2" fields=() i label
+  read_term_cols
   # Nine NUL-terminated fields per turn: the turn's model (the session's for
   # turns saved before turns had one), its effort, then what show_turn takes
   mapfile -d '' -t fields < <(jq -j --arg which "$which" "${SESSION_TURNS_JQ}"'
@@ -1299,7 +1592,7 @@ show_turn() {
   if [[ -n "$q" ]]; then
     printf '%s> %s%s\n' "$FG_DIM" "$q" "$RST"
   fi
-  render_status_bar bar_text "$mark" "$model" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$state"
+  render_status_bar_fitted bar_text "$mark" "$model" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$state"
   printf '%s\n\n' "$bar_text"
 
   if [[ "$USE_PAGER" -eq 1 ]]; then
@@ -1318,8 +1611,19 @@ fi
 
 if [[ -n "$VIEW_SESSION" ]]; then
   mkdir -p "$SESSION_DIR"
-  view_session "$VIEW_SESSION"
-  exit 0
+  rc=0
+  view_session "$VIEW_SESSION" || rc=$?
+  exit "$rc"
+fi
+
+if [[ "$YANK_PREVIOUS" -eq 1 ]]; then
+  newest=$(newest_session_file)
+  if [[ -z "$newest" ]]; then
+    echo "claude-ask: no saved session to yank from" >&2
+    exit 1
+  fi
+  yank_session_file "$newest"
+  exit
 fi
 
 # Allow sourcing for tests: if _CLAUDE_ASK_SOURCED is set, stop here
@@ -1350,21 +1654,24 @@ emit_text() {
 
 # Arguments: those of render_status_bar, without OUT
 update_status_bar() {
-  local bar_text info_text
-  render_status_bar bar_text "$@"
+  local bar_text info_text bar_rows info_rows
+  render_status_bar_fitted bar_text "$@"
   render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking" "${CONV_INFO:-}"
+  text_rows bar_rows "$bar_text"
+  text_rows info_rows "$info_text"
   # Clear from cursor to end of screen (removes old status bar + info)
   printf '\e[J'
   # Move down 2 lines, print status bar, then info line below
   printf '\n\n\e[2K%s\n\e[2K%s' "$bar_text" "$info_text"
-  # Move back up 3 lines (blank + status + info) and restore column
-  printf '\e[3A\e[%dG' "$CURSOR_COL"
+  # Move back up past the blank line and every row the bar and info line
+  # took (more than one each when they wrap), and restore the column
+  printf '\e[%dA\e[%dG' "$((1 + bar_rows + info_rows))" "$CURSOR_COL"
   STATUS_BAR_VISIBLE=1
 }
 
 finalize_status_bar() {
   local bar_text info_text
-  render_status_bar bar_text "$@"
+  render_status_bar_fitted bar_text "$@"
   render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "" "done" "$is_thinking" "${CONV_INFO:-}"
   # Clear from cursor to end of screen
   printf '\e[J'
@@ -1462,6 +1769,8 @@ on_interrupt() {
 trap cleanup EXIT
 trap on_interrupt INT
 trap 'exit 143' TERM
+# Re-read the width on a resize; a trapped WINCH does not cut a read short
+trap read_term_cols WINCH
 
 # ---------------------------------------------------------------------------
 # Streaming pager: the pager reads chunks from a FIFO and its rendered output
@@ -1546,6 +1855,13 @@ CONV_TURNS=0
 CONV_COST=""
 CONV_INFO=""
 LAST_TURN_STATUS=0
+# The model to go back to when claude does not know MODEL: the last one that
+# answered (empty: claude's default). MODEL_RESTORED is 1 while MODEL is one
+# -r took from the session, which is retried with the default if it is gone.
+MODEL_GOOD=""
+MODEL_RESTORED=0
+# The conversation's last answer, for /yank
+LAST_ANSWER=""
 
 # ask_once QUESTION: stream one answer, continuing the conversation when
 # there is one, and save the turn. Returns 0, 1 when claude failed, or 130
@@ -1561,6 +1877,7 @@ ask_once() {
 
   : > "$RAW_JSON"
   : > "$CLAUDE_STDERR"
+  read_term_cols
   reset_stream_state
   STREAM_START=$SECONDS
   CURSOR_COL=1
@@ -1613,6 +1930,24 @@ ask_once() {
     status="error"
   fi
 
+  # An unknown model answered nothing: the turn is not saved and the
+  # conversation stays where it was. Go back to the last model that worked;
+  # one -r restored (not one asked for) is retried with it at once.
+  if [[ "$api_error" == "model_not_found" ]]; then
+    local bad_model="$MODEL" retry="$MODEL_RESTORED"
+    MODEL="$MODEL_GOOD"
+    MODEL_RESTORED=0
+    show_final_status_bar
+    printf 'claude-ask: %s\n' "$stream_error" >&2
+    printf 'claude-ask: model %s not found; back to %s\n' "${bad_model:-?}" "${MODEL:-the default model}" >&2
+    debug_log "model_not_found: model=$bad_model fallback=${MODEL:-default} retry=$retry"
+    if ((retry)); then
+      ask_once "$q"
+      return
+    fi
+    return 1
+  fi
+
   if [[ -n "$session_id" ]]; then
     CONV_SESSION_ID="$session_id"
     if [[ -s "$RAW_JSON" ]] && saved_file=$(save_session "$RAW_JSON" "$q" "$CONV_FILE"); then
@@ -1643,19 +1978,105 @@ ask_once() {
     fi
     return 1
   fi
+  MODEL_GOOD="$MODEL"
+  MODEL_RESTORED=0
+  LAST_ANSWER="${result_text:-$answer_text}"
+  # -y/-Y copy every new answer; a failed copy is reported, the turn is fine
+  if [[ -n "$YANK" ]]; then
+    yank_answer "$LAST_ANSWER" "$YANK" "$YANK_CODE_N" || true
+  fi
   return 0
+}
+
+# In a popup: the whole answer from the top in a pager (the Markdown pager's
+# output read through CLAUDE_ASK_POPUP_PAGER, default "less -R -+F": -+F so
+# a LESS with -F does not quit at once on a short answer). Quitting it ends
+# claude-ask and so closes the popup. After a failure: wait for a key.
+page_answer_in_popup() {
+  local failed="$1" pager="${CLAUDE_ASK_POPUP_PAGER:-less -R -+F}"
+  if ((failed)) || [[ -z "$LAST_ANSWER" ]]; then
+    printf '\n%spress a key to close%s' "$FG_DIM" "$RST"
+    read -r -s -n 1 < /dev/tty || true
+    return
+  fi
+  if [[ "$USE_PAGER" -eq 1 ]]; then
+    printf '%s\n' "$LAST_ANSWER" | run_pager | bash -c "$pager"
+  else
+    printf '%s\n' "$LAST_ANSWER" | bash -c "$pager"
+  fi
+}
+
+# --split and --popup: start claude-ask again in a new tmux pane or a popup
+# with the same choices, and the question (if any) in a private temp file.
+# tmux runs it with the server's environment, so ours is passed on: PATH,
+# where sessions and state live, the editor and every CLAUDE_ASK_ variable.
+launch_in_tmux() {
+  local self child=() envs=() var qfile="" w h dir size
+  self=$(readlink -f "${BASH_SOURCE[0]}")
+  child=(--theme "$THEME")
+  if [[ -n "$EFFORT" ]]; then child+=(--effort "$EFFORT"); fi
+  if [[ -n "$MODEL" ]]; then child+=(--model "$MODEL"); fi
+  if [[ "$USE_PAGER" -eq 0 ]]; then
+    child+=(--no-pager)
+  elif [[ "$PAGER_IS_DEFAULT" -eq 0 ]]; then
+    child+=(--pager "$PAGER_CMD")
+  fi
+  if [[ "$STREAM_OUTPUT" -eq 0 ]]; then child+=(--no-stream); fi
+  if [[ "$SAVE_RAW" -eq 1 ]]; then child+=(--save-raw); fi
+  if [[ -n "$DEBUG_LOG" ]]; then child+=("--debug-log=$DEBUG_LOG"); fi
+  if [[ "$RESUME" -eq 1 ]]; then child+=(-r); fi
+  case "$YANK" in
+    answer) child+=(--yank) ;;
+    code) child+=("--yank-code${YANK_CODE_N:+=$YANK_CODE_N}") ;;
+  esac
+
+  for var in PATH SESSION_DIR XDG_STATE_HOME XDG_RUNTIME_DIR EDITOR $(compgen -e CLAUDE_ASK_); do
+    if [[ -n "${!var:-}" ]]; then envs+=(-e "$var=${!var}"); fi
+  done
+  if [[ -n "$question" ]]; then
+    qfile=$(mktemp "${run_dir_base}/claude-ask-question.XXXXXX")
+    printf '%s' "$question" > "$qfile"
+    envs+=(-e "_CLAUDE_ASK_QUESTION_TMP=$qfile")
+  fi
+
+  local rc=0
+  if [[ "$TMUX_MODE" == split ]]; then
+    # With a question the answer goes to the new pane and it stays as a chat;
+    # -d keeps the focus here. Without one the chat (and the focus) go there.
+    local detach=()
+    if [[ -n "$question" ]]; then
+      child+=(-i)
+      detach=(-d)
+    fi
+    dir="$SPLIT_DIR"
+    if [[ "$dir" == auto ]]; then
+      read -r w h < <(tmux display-message -p '#{pane_width} #{pane_height}')
+      dir=$(split_direction "${w:-80}" "${h:-24}")
+    fi
+    debug_log "tmux split: -$dir ${detach[*]} ${child[*]}"
+    tmux split-window "-$dir" "${detach[@]}" -c "$PWD" "${envs[@]}" -- "$self" "${child[@]}" || rc=$?
+  else
+    # A question is answered, then paged; quitting the pager closes the popup
+    if [[ -n "$question" && "$INTERACTIVE" -eq 1 ]]; then child+=(-i); fi
+    if [[ -n "$question" && "$INTERACTIVE" -eq 0 ]]; then envs+=(-e "_CLAUDE_ASK_PAGE_AFTER=1"); fi
+    size="${CLAUDE_ASK_POPUP_SIZE:-80%}"
+    w="${size%%x*}"
+    h="${size#*x}"
+    debug_log "tmux popup: $w x $h ${child[*]}"
+    tmux display-popup -E -w "$w" -h "$h" -d "$PWD" "${envs[@]}" -- "$self" "${child[@]}" || rc=$?
+  fi
+  if ((rc != 0)); then
+    if [[ -n "$qfile" ]]; then rm -f "$qfile"; fi
+    echo "claude-ask: tmux could not start the $TMUX_MODE (status $rc)" >&2
+    return 1
+  fi
 }
 
 # Continue the newest saved session: load it into the CONV_* state and show
 # where it left off (a header and the last turn)
 resume_newest() {
-  local file="" f fields=() total="" header
-  while IFS= read -r f; do
-    if [[ -n "$f" ]]; then
-      file="$f"
-      break
-    fi
-  done < <(ls -t "$SESSION_DIR"/*.json 2> /dev/null)
+  local file fields=() total="" header
+  file=$(newest_session_file)
   if [[ -z "$file" ]]; then
     echo "claude-ask: no saved session to resume" >&2
     return 1
@@ -1664,7 +2085,7 @@ resume_newest() {
   mapfile -d '' -t fields < <(jq -j "${SESSION_TURNS_JQ}"'
     (turns_of | last) as $last
     | [(.session_id // ""), (turns_of | length), (.cost_usd // ""), (.cwd // ""),
-       ($last.effort // ""), ($last.model_option // "")]
+       ($last.effort // ""), ($last.model_option // ""), ($last.answer // "")]
     | map(tostring + "\u0000") | add' "$file")
   if [[ -z "${fields[0]:-}" ]]; then
     echo "claude-ask: $(basename "$file" .json) has no session id and cannot be resumed" >&2
@@ -1676,7 +2097,11 @@ resume_newest() {
   CONV_COST="${fields[2]:-}"
   # -e, -m and the environment win over what the session was last asked with
   if [[ -z "$EFFORT" ]]; then EFFORT="${fields[4]:-}"; fi
-  if [[ -z "$MODEL" ]]; then MODEL="${fields[5]:-}"; fi
+  LAST_ANSWER="${fields[6]:-}"
+  if [[ -z "$MODEL" && -n "${fields[5]:-}" ]]; then
+    MODEL="${fields[5]}"
+    MODEL_RESTORED=1
+  fi
   debug_log "resuming $file: session_id=$CONV_SESSION_ID turns=$CONV_TURNS effort=${EFFORT:-default} model=${MODEL:-default}"
 
   format_cost total "$CONV_COST"
@@ -1709,6 +2134,7 @@ chat_help() {
 /model [NAME]      show or set the model (opus, sonnet, haiku, fable, a full
                    name), or default
 /theme [NAME]      show or set the status bar theme: minimal, bubbles, powerline
+/yank [code [N]]   copy the last answer, its code blocks, or only block N
 /status            the conversation, model, effort and theme
 /new               start a new conversation
 /editor, \\e        compose the question in \$EDITOR
@@ -1761,9 +2187,11 @@ chat_command() {
         echo "claude-ask: a model name has no spaces" >&2
       elif [[ "$arg" == default ]]; then
         MODEL=""
+        MODEL_RESTORED=0
         chat_note "model: default"
       else
         MODEL="$arg"
+        MODEL_RESTORED=0
         chat_note "model: $MODEL"
       fi
       ;;
@@ -1777,6 +2205,15 @@ chat_command() {
         echo "claude-ask: theme must be one of: minimal, bubbles, powerline" >&2
       fi
       ;;
+    /yank)
+      if [[ -z "$arg" ]]; then
+        yank_answer "$LAST_ANSWER" answer || true
+      elif [[ "$arg" =~ ^code([[:space:]]+([1-9][0-9]*))?$ ]]; then
+        yank_answer "$LAST_ANSWER" code "${BASH_REMATCH[2]}" || true
+      else
+        echo "claude-ask: /yank takes nothing, code, or code N" >&2
+      fi
+      ;;
     /status) chat_status ;;
     /new)
       CONV_FILE=""
@@ -1784,6 +2221,7 @@ chat_command() {
       CONV_TURNS=0
       CONV_COST=""
       CONV_INFO=""
+      LAST_ANSWER=""
       chat_note "new conversation"
       ;;
     *) echo "claude-ask: unknown command $cmd (/help lists them)" >&2 ;;
@@ -1861,6 +2299,11 @@ chat_loop() {
 # ---------------------------------------------------------------------------
 # Ask claude: an optional resume, the question, then the chat
 # ---------------------------------------------------------------------------
+if [[ -n "$TMUX_MODE" ]]; then
+  launch_in_tmux
+  exit
+fi
+
 require_cmds "$CLAUDE_BIN"
 mkdir -p "$SESSION_DIR"
 
@@ -1874,6 +2317,9 @@ fi
 
 if [[ -n "$question" ]]; then
   ask_once "$question" || LAST_TURN_STATUS=$?
+  if [[ -n "${_CLAUDE_ASK_PAGE_AFTER:-}" && "$INTERACTIVE" -eq 0 ]]; then
+    page_answer_in_popup "$((LAST_TURN_STATUS != 0))"
+  fi
 fi
 
 if [[ "$INTERACTIVE" -eq 1 ]]; then

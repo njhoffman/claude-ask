@@ -18,10 +18,16 @@ common_setup() {
   export CLAUDE_ASK_BIN="$STUB_DIR/claude"
   export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/full_session.jsonl"
   unset CLAUDE_STUB_STDERR CLAUDE_STUB_EXIT CLAUDE_STUB_ARGS CLAUDE_STUB_STDIN CLAUDE_STUB_DELAY
-  unset CLAUDE_STUB_LOG CLAUDE_STUB_FAIL_CALL CLAUDE_ASK_FORCE_INTERACTIVE
+  unset CLAUDE_STUB_LOG CLAUDE_STUB_FAIL_CALL CLAUDE_STUB_UNKNOWN_MODEL CLAUDE_ASK_FORCE_INTERACTIVE
   # Tests use plain text unless they choose a pager
   export CLAUDE_ASK_PAGER="cat"
   export CLAUDE_ASK_DEMO_DELAY=0
+  # A wide terminal, so no test depends on the width of the one running it
+  export CLAUDE_ASK_COLUMNS=200
+  # Never the real tmux session the suite may run in, nor the clipboard
+  unset TMUX TMUX_PANE CLAUDE_STUB_TMUX_LOG CLAUDE_STUB_TMUX_SIZE CLAUDE_STUB_TMUX_BUFFER
+  unset CLAUDE_STUB_TMUX_QUESTION CLAUDE_STUB_TMUX_RUN CLAUDE_STUB_TMUX_EXIT
+  export CLAUDE_ASK_CLIPBOARD="cat > '$TEST_TEMP_DIR/clipboard'"
 }
 
 setup() {

@@ -289,3 +289,58 @@ saved_session() {
   chat "/effort high" "q"
   grep -qx "/effort high" "$XDG_STATE_HOME/claude-ask/history"
 }
+
+# ---------------------------------------------------------------------------
+# A model claude does not know
+# ---------------------------------------------------------------------------
+@test "-m with an unknown model: claude's message, exit 1, nothing saved" {
+  export CLAUDE_STUB_UNKNOWN_MODEL=nosuchmodel
+  run "$SCRIPT_PATH" --no-pager -m nosuchmodel "question"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"issue with the selected model (nosuchmodel)"* ]]
+  [[ "$output" == *"model nosuchmodel not found; back to the default model"* ]]
+  [ -z "$(ls -A "$SESSION_DIR")" ]
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+}
+
+@test "an unknown model's message is not shown as the answer" {
+  export CLAUDE_STUB_UNKNOWN_MODEL=nosuchmodel
+  run --separate-stderr "$SCRIPT_PATH" --no-pager -m nosuchmodel "question"
+  [[ "$output" != *"issue with the selected model"* ]]
+  [[ "$stderr" == *"issue with the selected model"* ]]
+}
+
+@test "chat: an unknown /model goes back to the last model that answered" {
+  export CLAUDE_STUB_UNKNOWN_MODEL=nosuchmodel
+  CHAT_ARGS=(-m sonnet)
+  chat "one" "/model nosuchmodel" "two" "three"
+  [[ "$output" == *"model nosuchmodel not found; back to sonnet"* ]]
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 3 ]
+  sed -n 2p "$CLAUDE_STUB_LOG" | grep -q -- "--model nosuchmodel | two"
+  # Not retried: the next question is asked with sonnet, in the same
+  # conversation, and the failed turn is not in the file
+  sed -n 3p "$CLAUDE_STUB_LOG" | grep -q -- "--resume full-session-001 --model sonnet | three"
+  [ "$(jq -r '[.turns[].question] | join(",")' "$SESSION_DIR/one.json")" = "one,three" ]
+}
+
+@test "chat: with no model that answered yet it goes back to the default" {
+  export CLAUDE_STUB_UNKNOWN_MODEL=nosuchmodel
+  CHAT_ARGS=(-m nosuchmodel)
+  chat "one" "two"
+  [[ "$output" == *"back to the default model"* ]]
+  ! sed -n 2p "$CLAUDE_STUB_LOG" | grep -q -- "--model"
+  ! sed -n 2p "$CLAUDE_STUB_LOG" | grep -q -- "--resume"
+}
+
+@test "-r: a saved model that is gone is retried with the default" {
+  export CLAUDE_STUB_UNKNOWN_MODEL=retired-model
+  saved_session saved high retired-model
+  run "$SCRIPT_PATH" --no-pager -r "follow up" < /dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"model retired-model not found; back to the default model"* ]]
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 2 ]
+  sed -n 1p "$CLAUDE_STUB_LOG" | grep -q -- "--resume old-id --effort high --model retired-model | follow up"
+  sed -n 2p "$CLAUDE_STUB_LOG" | grep -q -- "--resume old-id --effort high | follow up"
+  [ "$(jq -r '.turns | length' "$SESSION_DIR/saved.json")" = "2" ]
+  [ "$(jq -r '.turns[1].model_option' "$SESSION_DIR/saved.json")" = "null" ]
+}

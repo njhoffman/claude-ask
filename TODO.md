@@ -91,7 +91,8 @@ Reviewed: 2026-11-03
   uses the default), and fix the example.
 - [ ] **Run lint and tests in CI.** (p3) [chore] `just lint` and `just test`
   pass now but nothing runs them. Add a GitHub Actions workflow (shellcheck,
-  bats, jq and bc are all in the Ubuntu image or apt) or a pre-commit hook.
+  bats and jq are all in the Ubuntu image or apt; `bc` is no longer needed)
+  or a pre-commit hook. The suite needs bash 5 and takes about 35s.
 - [x] **`--demo-output` tests are slow.** (p3) [test] `generate_mock_stream`
   sleeps 0.03s per chunk and `test/demo_output.bats` runs the full demo
   (six streams) in each of its tests. Make the demo delay an environment
@@ -118,6 +119,54 @@ Reviewed: 2026-11-03
   older conversation, reusing `view_session`'s lookup by index, name and prefix.
 - [ ] **The chat prompt cannot take a multi-line paste.** (p3) [feature]
   Pasting several lines at the `> ` prompt sends each line as its own question.
-  Enable bracketed paste for the prompt's readline (`bind 'set
-  enable-bracketed-paste on'`) and check the pasted block arrives as one
-  question, or document `\e` for that.
+  Bracketed paste does not help: it is already on by default (readline 8.1+),
+  and a test under a pseudo-terminal shows `read -e` still returns at the
+  first pasted newline (`line one`, with `line two` left for the next read).
+  After `read` returns, gather any input already waiting (`read -t 0`, then
+  short-timeout reads) into the same question, since typed lines never arrive
+  that fast; or document `\e` / `/editor` for multi-line questions.
+- [x] **A status bar wider than the terminal breaks the redraw.** (p2) [bug]
+  `update_status_bar` moves back up with `\e[3A`, which assumes the bar and
+  the info line each take one row. In a narrow pane (a tmux split under about
+  75 columns), the powerline bar with tokens, cost, duration and now an
+  effort level wraps, so each redraw lands one row lower and leaves copies of
+  the bar behind. Cut the bar and info line to the terminal width (count
+  visible characters without the escapes), or drop segments from the right,
+  and test it at a small `COLUMNS`.
+- [x] **An unknown `/model` fails every turn after it.** (p3) [bug] `claude`
+  answers `--model nosuchmodel` with an error result ("There's an issue with
+  the selected model ... Run --model to pick a different model") and exit 1;
+  `claude-ask` prints that, but `MODEL` stays set, so every later question
+  fails the same way until `/model default`. On an `assistant` event with
+  `error: "model_not_found"`, restore the previous model and say so, or at
+  least hint at `/model` in the chat.
+- [ ] **The chat prompt does not show the model or effort.** (p3) [feature]
+  The status bar appears only while an answer streams, so after `/effort` or
+  `/model` nothing on screen shows the current setting until the next answer.
+  Put a short form in the prompt (`opus 5.5 · high > `), dim, or print it
+  after each change (already done) and at chat start next to the `/help`
+  hint.
+- [ ] **Tab completion for chat commands.** (p3) [feature] `read -e` completes
+  file names, so `/ef<Tab>` does nothing useful. Bind completion for the
+  `/word` commands and their arguments (effort levels, themes, model aliases)
+  if bash's `read -e` can use it (`bind -x` or `complete -I` in bash 5), or
+  note that it cannot.
+- [ ] **Shell completion for the options.** (p3) [feature] No bash or zsh
+  completion for `--theme`, `-e`, `-m`, `--session` (session names) and the
+  rest. Add `completions/_claude-ask` (zsh) and a bash one, installed by
+  `just install`.
+- [ ] **`--history` starts two `jq` processes per session file.** (p3) [perf]
+  `show_history` runs one `jq` for the fields and `format_time_ago` another
+  (in a command substitution) for the timestamp, so a few hundred sessions
+  take seconds. Compute the age in the first `jq` (`now - (.timestamp |
+  fromdateiso8601)`), or read every file in one `jq` call.
+- [ ] **The pager plumbing is still named after `bat`.** (p3) [refactor]
+  `BAT_PID`, `BAT_FIFO`, `BAT_OUT_FD` and `drain_bat` (`bin/claude-ask`
+  around lines 1385 and 1432-1474) date from when the pager was `bat`; it is
+  now any `PAGER_CMD`. Rename them `PAGER_*` and `drain_pager`.
+- [ ] **`--popup` is only tested against the tmux stub.** (p3) [test]
+  `display-popup` needs an attached client, so the smoke test on a private
+  tmux server (`tmux -L`) covered `--split` but not the popup: the paging
+  after the answer, `-+F` with a `LESS` that has `-F`, and the popup closing
+  on quit or `/quit`. Check it by hand, or drive an attached client in a
+  test (a `script`-run `tmux attach` on the private server).

@@ -15,6 +15,10 @@ claude-ask -r                            # continue the most recent session as a
 git diff | claude-ask                    # piped input is the question
 claude-ask --theme powerline "..."       # minimal | bubbles | powerline
 claude-ask -e high -m sonnet "..."       # effort level and model
+claude-ask -Y "..."                      # copy the answer's code blocks
+claude-ask -y                            # copy the last saved answer
+claude-ask --split "..."                 # answer in a new tmux pane
+claude-ask --popup                       # chat in a tmux popup
 claude-ask --history                     # saved sessions
 claude-ask --session 1                   # replay the newest one
 claude-ask --version                     # print the version
@@ -40,7 +44,16 @@ defaults. Both are passed to `claude` on every turn. The status bar shows the
 model with its version (`opus 5.5`) and, after it, the effort level; with no
 effort given, `claude` uses its own setting, which the stream does not
 report, so none is shown. `-r` keeps the effort and model the session was
-last asked with, unless `-e` or `-m` is given.
+last asked with, unless `-e` or `-m` is given. When `claude` does not know
+the model, the turn is not saved and `claude-ask` goes back to the last model
+that answered (or the default); a model `-r` restored is then retried with
+the default.
+
+In a terminal too narrow for the whole status bar, segments are left out
+from the right (done, duration, cost, tokens); `CLAUDE_ASK_COLUMNS` sets the
+width it is fitted to.
+
+## Chat commands
 
 In a chat, these commands work at the prompt:
 
@@ -50,6 +63,7 @@ In a chat, these commands work at the prompt:
 | `/effort [LEVEL]` | show or set the effort for the next questions; `default` clears it |
 | `/model [NAME]`   | show or set the model; `default` clears it               |
 | `/theme [NAME]`   | show or set the status bar theme                         |
+| `/yank [code [N]]` | copy the last answer, its code blocks, or block N       |
 | `/status`         | the conversation, model, effort and theme                |
 | `/new`            | start a new conversation (a new session file)            |
 | `/editor`, `\e`   | compose the question in `$EDITOR`                        |
@@ -60,6 +74,30 @@ command; one like `/etc/hosts: what is this?` is asked as a question.
 Ctrl-C stops the answer being streamed without leaving the chat. Questions are kept in `~/.local/state/claude-ask/history`
 for the up arrow. Each conversation is one session file with a `turns` list;
 `--history` shows the turn count and `--session` replays every turn.
+
+## Yanking
+
+`-y` copies the answer, `-Y` its fenced code blocks (a blank line between
+them) and `--yank-code=N` only block N. They go to the clipboard (wl-copy on
+Wayland, xclip or xsel on X11, pbcopy on macOS; `CLAUDE_ASK_CLIPBOARD` is a
+command run with `bash -c` that reads the text on stdin) and, inside tmux, to
+a tmux buffer (`prefix ]` pastes it). With a question they copy the new
+answer; with no question they copy the newest session's last answer (or the
+one `--session ID|N` names) and exit. `-i -y` copies every answer in a chat.
+
+## tmux
+
+`--split` starts claude-ask in a new pane: side by side when the current
+pane is more than twice as wide as it is tall and each half keeps 80
+columns, otherwise one above the other (`--split=h` or `--split=v` to
+choose). With a question, the answer streams in the new pane, which stays
+open as a chat, and you stay where you were; without one, the chat opens
+there and so does the focus. `--popup` uses a tmux popup instead
+(`CLAUDE_ASK_POPUP_SIZE`, e.g. `90%` or `120x40`): a question's answer
+streams, then opens in a pager (`CLAUDE_ASK_POPUP_PAGER`, default
+`less -R -+F`), and quitting the pager closes the popup; without a question
+it is a chat until `/quit`. Both pass on the other options and the
+`CLAUDE_ASK_*` variables, which tmux would otherwise not see.
 
 ## Install
 

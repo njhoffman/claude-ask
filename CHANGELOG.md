@@ -6,6 +6,47 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-03
+
+### Added
+
+- Yanking: `-y` / `--yank` copies the answer and `-Y` / `--yank-code`
+  its fenced code blocks (`--yank-code=N` only the Nth) to the clipboard
+  (wl-copy, xclip, xsel or pbcopy; `CLAUDE_ASK_CLIPBOARD` overrides) and,
+  inside tmux, a tmux buffer. With a question they copy the new answer
+  (every answer in a chat with `-i`); without one, the last answer of the
+  newest session, or of `--session ID|N`, and exit. The last newline is left
+  off, so a pasted command does not run at once.
+- Chat command `/yank [code [N]]` copies the last answer, its code blocks or
+  block N; after `-r` that is the session's last answer.
+- `--split[=h|v]` runs claude-ask in a new tmux pane, side by side when the
+  pane is more than twice as wide as tall with 80 columns per half, else one
+  above the other. With a question the answer goes to the new pane (which
+  then stays as a chat) and the focus stays where it was; without one you
+  chat in the new pane.
+- `--popup` runs claude-ask in a tmux popup (`CLAUDE_ASK_POPUP_SIZE`,
+  default 80%): a question's answer streams and then opens from the top in a
+  pager (`CLAUDE_ASK_POPUP_PAGER`, default `less -R -+F`); quitting it
+  closes the popup. Without a question it is a chat until `/quit`.
+- The options, `CLAUDE_ASK_*` variables, `SESSION_DIR` and `PATH` reach the
+  new pane or popup; the question goes through a private temp file, so long
+  piped questions work.
+
+### Fixed
+
+- In a terminal too narrow for the whole status bar, segments are left out
+  from the right (done, then duration, cost and tokens) instead of the bar
+  wrapping, and the redraw counts wrapped rows, so it no longer leaves
+  copies of the bar behind. The width is re-read when the terminal is
+  resized; `CLAUDE_ASK_COLUMNS` overrides it.
+- A model claude does not know no longer breaks the conversation. Its error
+  is reported (not shown as the answer), the turn is not saved, and the chat
+  goes back to the last model that answered (or the default). A model that
+  `-r` restored from the session and that no longer exists is retried with
+  the default model straight away.
+- An API error's message (from an `assistant` event with an `error`) is
+  reported as the error instead of being streamed as the answer.
+
 ## [0.5.0] - 2026-11-03
 
 ### Added

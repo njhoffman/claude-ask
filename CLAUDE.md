@@ -40,7 +40,24 @@ through a pager with a themed status bar redrawn just below the streamed text
   passed as `--effort` and `--model` on every turn. The stream never reports
   the effort, so the status bar (`model_label`) shows only one set here.
   Each turn saves `model` (from `init`), `effort` and `model_option`; `-r`
-  restores the last two when not given.
+  restores the last two when not given. An `assistant` event's `error`
+  becomes `api_error`; on `model_not_found` `ask_once` saves nothing and
+  falls back to `MODEL_GOOD` (retrying once when `MODEL_RESTORED`).
+- **Yank**: `extract_code_blocks` (fills `CODE_BLOCKS`), `yank_answer`,
+  `yank_text` (clipboard via `clipboard_cmd`, plus `tmux load-buffer`).
+  `LAST_ANSWER` is the result text of the last turn (or the session's last
+  answer after `-r`). `YANK_PREVIOUS`: `-y`/`-Y` with no question.
+- **tmux**: `launch_in_tmux` re-runs the script with `split-window` or
+  `display-popup`, passing options and `-e VAR=...` (tmux uses the server's
+  environment); the question goes in `_CLAUDE_ASK_QUESTION_TMP` (read and
+  deleted), a popup's paging in `_CLAUDE_ASK_PAGE_AFTER`.
+  `test/stubs/tmux` logs calls and can run the command
+  (`CLAUDE_STUB_TMUX_RUN`); `common_setup` unsets `TMUX` and points
+  `CLAUDE_ASK_CLIPBOARD` at a temp file.
+- **Width**: `render_status_bar_fitted` drops segments to fit `TERM_COLS`
+  (`read_term_cols`: `CLAUDE_ASK_COLUMNS`, the tty, `COLUMNS`; re-read on
+  WINCH); `update_status_bar` moves up by `text_rows`. Tests set
+  `CLAUDE_ASK_COLUMNS=200`.
 - **Session files**: one per conversation; `turns` plus top-level first
   question, last answer and totals (`SESSION_JQ`). Files from before turns are
   read as one turn (`SESSION_TURNS_JQ`'s `turns_of`). Model and cwd come from

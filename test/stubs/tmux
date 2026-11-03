@@ -1,0 +1,48 @@
+#!/bin/bash
+# Stand-in for tmux in tests (put test/stubs first on PATH, set TMUX).
+#   CLAUDE_STUB_TMUX_LOG     file that gets one line per call: the arguments
+#   CLAUDE_STUB_TMUX_SIZE    "WIDTH HEIGHT" for display-message (default "200 50")
+#   CLAUDE_STUB_TMUX_BUFFER  file that receives what load-buffer reads
+#   CLAUDE_STUB_TMUX_QUESTION  file that receives the question file's text
+#                            (split-window and display-popup, from -e)
+#   CLAUDE_STUB_TMUX_RUN     when set, split-window and display-popup run
+#                            their command with the -e variables (stdin from
+#                            /dev/null, output to this stub's output)
+#   CLAUDE_STUB_TMUX_EXIT    exit status of split-window and display-popup
+if [[ -n "${CLAUDE_STUB_TMUX_LOG:-}" ]]; then
+  printf '%s\n' "$*" >> "$CLAUDE_STUB_TMUX_LOG"
+fi
+case "$1" in
+  display-message)
+    printf '%s\n' "${CLAUDE_STUB_TMUX_SIZE:-200 50}"
+    ;;
+  load-buffer)
+    cat > "${CLAUDE_STUB_TMUX_BUFFER:-/dev/null}"
+    ;;
+  split-window | display-popup)
+    shift
+    envs=()
+    while [[ $# -gt 0 && "$1" != "--" ]]; do
+      case "$1" in
+        -e)
+          envs+=("$2")
+          if [[ "$2" == _CLAUDE_ASK_QUESTION_TMP=* && -n "${CLAUDE_STUB_TMUX_QUESTION:-}" ]]; then
+            cp "${2#*=}" "$CLAUDE_STUB_TMUX_QUESTION"
+          fi
+          shift 2
+          ;;
+        -c | -d | -w | -h | -l | -t)
+          # display-popup's -d and split-window's -d differ: -d takes a
+          # directory only when the next word is one
+          if [[ "$1" == -d && ! -d "${2:-}" ]]; then shift; else shift 2; fi
+          ;;
+        *) shift ;;
+      esac
+    done
+    shift
+    if [[ -n "${CLAUDE_STUB_TMUX_RUN:-}" ]]; then
+      env "${envs[@]}" "$@" < /dev/null
+    fi
+    exit "${CLAUDE_STUB_TMUX_EXIT:-0}"
+    ;;
+esac
