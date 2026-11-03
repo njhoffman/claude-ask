@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The script needs bash 5 (macOS ships 3.2), so Linux only
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # jq, shellcheck and script (util-linux) are in the runner image
+      - name: Install bats, just and bc
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bats just bc
+
+      - name: Tool versions
+        run: |
+          bash --version | head -1
+          jq --version
+          shellcheck --version | sed -n 2p
+          bats --version
+          just --version
+
+      - name: Lint
+        run: just lint
+
+      - name: Test
+        run: just test

@@ -6,6 +6,21 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-03
+
+### Changed
+
+- Streaming is lighter: one `jq` process parses the whole stream instead
+  of one per event (300 events: 10.5s of parsing down to 0.4s).
+- `--history` reads every session file with one `jq` call instead of
+  three processes per file (300 sessions: 4.9s down to 0.2s). A file that
+  is not valid JSON is still listed, by name.
+
+### Added
+
+- CI: GitHub Actions runs shellcheck and the bats suite on every push to
+  main and every pull request.
+
 ## [0.6.0] - 2026-11-03
 
 ### Added

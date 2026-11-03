@@ -59,46 +59,81 @@ setup() {
 }
 
 # ---------------------------------------------------------------------------
-# format_time_ago
+# format_age
 # ---------------------------------------------------------------------------
-@test "format_time_ago: seconds" {
-  local ts
-  ts=$(jq -rn '(now - 30) | floor | todate')
-  result=$(format_time_ago "$ts")
-  [[ "$result" == *"sec ago"* ]]
+@test "format_age: seconds, minutes, hours, days, weeks" {
+  local r
+  format_age r 30
+  [ "$r" = "30 sec ago" ]
+  format_age r 900
+  [ "$r" = "15 min ago" ]
+  format_age r 10800
+  [ "$r" = "3 hrs ago" ]
+  format_age r 9000
+  [ "$r" = "2.5 hrs ago" ]
+  format_age r 432000
+  [ "$r" = "5d ago" ]
+  format_age r 1814400
+  [ "$r" = "3w ago" ]
 }
 
-@test "format_time_ago: minutes" {
+@test "format_age: the edges between units" {
+  local r
+  format_age r 59
+  [ "$r" = "59 sec ago" ]
+  format_age r 60
+  [ "$r" = "1 min ago" ]
+  format_age r 3600
+  [ "$r" = "1 hrs ago" ]
+  format_age r 86400
+  [ "$r" = "1d ago" ]
+  format_age r 604800
+  [ "$r" = "1w ago" ]
+}
+
+# ---------------------------------------------------------------------------
+# history_records
+# ---------------------------------------------------------------------------
+@test "history_records: one jq reads every file, in the order given" {
+  jq -n '{question: "q1", answer: "a\nb", timestamp: "2026-11-01T00:00:00Z"}' > "$SESSION_DIR/one.json"
+  jq -n '{turns: [{question: "q2", answer: "x"}, {question: "q3", answer: "y\nz"}],
+    timestamp: "2026-11-02T00:00:00Z"}' > "$SESSION_DIR/two.json"
+  history_records "$SESSION_DIR/two.json" "$SESSION_DIR/one.json"
+  [ "${#HISTORY_RECORDS[@]}" -eq 10 ]
+  [ "${HISTORY_RECORDS[0]}" = "$SESSION_DIR/two.json" ]
+  [ "${HISTORY_RECORDS[2]}" = "q2" ]
+  [ "${HISTORY_RECORDS[3]}" = "3" ]
+  [ "${HISTORY_RECORDS[4]}" = "2" ]
+  [ "${HISTORY_RECORDS[5]}" = "$SESSION_DIR/one.json" ]
+  [ "${HISTORY_RECORDS[6]}" = "1793491200" ]
+  [ "${HISTORY_RECORDS[8]}" = "2" ]
+}
+
+@test "history_records: a broken file keeps its name and the others still read" {
+  jq -n '{question: "good", answer: "a", timestamp: "2026-11-01T00:00:00Z"}' > "$SESSION_DIR/good.json"
+  printf '{not json' > "$SESSION_DIR/broken.json"
+  history_records "$SESSION_DIR/broken.json" "$SESSION_DIR/good.json"
+  [ "${#HISTORY_RECORDS[@]}" -eq 10 ]
+  [ "${HISTORY_RECORDS[0]}" = "$SESSION_DIR/broken.json" ]
+  [ "${HISTORY_RECORDS[2]}" = "" ]
+  [ "${HISTORY_RECORDS[7]}" = "good" ]
+}
+
+@test "history_records: a timestamp jq cannot read gives no age" {
+  jq -n '{question: "q", timestamp: "yesterday"}' > "$SESSION_DIR/odd.json"
+  history_records "$SESSION_DIR/odd.json"
+  [ "${HISTORY_RECORDS[1]}" = "" ]
+  run show_history "$SESSION_DIR"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"odd"* ]]
+}
+
+@test "show_history: shows the age of the last timestamp" {
   local ts
   ts=$(jq -rn '(now - 900) | floor | todate')
-  result=$(format_time_ago "$ts")
-  [[ "$result" == *"min ago"* ]]
-}
-
-@test "format_time_ago: hours" {
-  local ts
-  ts=$(jq -rn '(now - 10800) | floor | todate')
-  result=$(format_time_ago "$ts")
-  [[ "$result" == *"hrs ago"* ]]
-}
-
-@test "format_time_ago: days" {
-  local ts
-  ts=$(jq -rn '(now - 432000) | floor | todate')
-  result=$(format_time_ago "$ts")
-  [[ "$result" == *"d ago"* ]]
-}
-
-@test "format_time_ago: weeks" {
-  local ts
-  ts=$(jq -rn '(now - 1814400) | floor | todate')
-  result=$(format_time_ago "$ts")
-  [ "$result" = "3w ago" ]
-}
-
-@test "format_time_ago: prints nothing for an unparsable timestamp" {
-  result=$(format_time_ago "yesterday")
-  [ -z "$result" ]
+  jq -n --arg ts "$ts" '{question: "recent", answer: "a", timestamp: $ts}' > "$SESSION_DIR/recent.json"
+  run show_history "$SESSION_DIR"
+  [[ "$output" == *"15 min ago"* ]]
 }
 
 # ---------------------------------------------------------------------------

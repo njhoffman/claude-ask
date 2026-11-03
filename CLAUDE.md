@@ -62,9 +62,16 @@ through a pager with a themed status bar redrawn just below the streamed text
   question, last answer and totals (`SESSION_JQ`). Files from before turns are
   read as one turn (`SESSION_TURNS_JQ`'s `turns_of`). Model and cwd come from
   the `init` system event; hook events come before it.
-- **Stream parsing**: `process_stream_line` (one `jq` call per event) updates
-  the state variables and is the only parser: the main loop, `--demo-output`
-  and the tests all call it. `save_session` writes session files.
+- **Stream parsing**: `process_stream_line` updates the state variables and
+  is the only parser: the main loop, `--demo-output` and the tests all call
+  it. It gets an event's fields from one long-lived `jq` coprocess
+  (`stream_fields`, `STREAM_COPROC_JQ`): one NUL-separated record of
+  `STREAM_FIELD_COUNT` fields per input line, an empty one for bad input.
+  The coprocess closes inherited fds (the pager FIFO is fd 3) and ignores
+  SIGINT; it is restarted if it dies. `save_session` writes session files.
+- **History**: `history_records` reads all session files with one `jq`
+  (`HISTORY_JQ`), falling back to one per file when one is not JSON;
+  `format_age` formats the age.
 - **Runtime files**: one private `mktemp -d` per run (under
   `$XDG_RUNTIME_DIR`) holds the pager FIFO, the raw stream and `claude`'s
   stderr; `cleanup` removes it.
@@ -78,6 +85,8 @@ through a pager with a themed status bar redrawn just below the streamed text
   `test/stubs/claude`, which replays `CLAUDE_STUB_FIXTURE`; test files with
   their own `setup()` must call `common_setup` first.
 - `docs/claude-ask.example.json` is a recorded stream-json session.
+- CI: `.github/workflows/ci.yml` runs `just lint` and `just test` on
+  Ubuntu 24.04 (bats, just and bc from apt).
 
 ## Versioning
 

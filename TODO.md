@@ -89,7 +89,7 @@ Reviewed: 2026-11-03
   header's own example, line 29) logs to a file named `What is 2+2?` and opens
   the editor. Take the file only as `--debug-log=FILE` (bare `--debug-log`
   uses the default), and fix the example.
-- [ ] **Run lint and tests in CI.** (p3) [chore] `just lint` and `just test`
+- [x] **Run lint and tests in CI.** (p3) [chore] `just lint` and `just test`
   pass now but nothing runs them. Add a GitHub Actions workflow (shellcheck,
   bats and jq are all in the Ubuntu image or apt; `bc` is no longer needed)
   or a pre-commit hook. The suite needs bash 5 and takes about 35s.
@@ -107,7 +107,7 @@ Reviewed: 2026-11-03
   `update_status_bar` renders the bar and the info line in two more; a
   `--demo-output` run with no delay still takes about 4s. Do the formatting
   with bash integer arithmetic and `printf -v` instead of `bc` and subshells.
-- [ ] **One `jq` process per stream event.** (p3) [perf] Since the status bar
+- [x] **One `jq` process per stream event.** (p3) [perf] Since the status bar
   redraw stopped forking, the per-event `jq` call in `process_stream_line` is
   nearly all of the remaining time (about 16ms an event; 4.8s of 5.2s for 300
   events). Run one long-lived `jq --unbuffered` over the whole stream (a
@@ -155,7 +155,7 @@ Reviewed: 2026-11-03
   completion for `--theme`, `-e`, `-m`, `--session` (session names) and the
   rest. Add `completions/_claude-ask` (zsh) and a bash one, installed by
   `just install`.
-- [ ] **`--history` starts two `jq` processes per session file.** (p3) [perf]
+- [x] **`--history` starts two `jq` processes per session file.** (p3) [perf]
   `show_history` runs one `jq` for the fields and `format_time_ago` another
   (in a command substitution) for the timestamp, so a few hundred sessions
   take seconds. Compute the age in the first `jq` (`now - (.timestamp |

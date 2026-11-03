@@ -199,3 +199,74 @@ load test_helper
   [ "$(short_model_name "anthropic.claude-sonnet-4-5-v1:0")" = "sonnet" ]
   [ "$(short_model_name "some-other-model[1m]")" = "some-other-model" ]
 }
+
+# ---------------------------------------------------------------------------
+# The parser coprocess
+# ---------------------------------------------------------------------------
+@test "parser: bad lines give no event and the next good line still parses" {
+  source_claude_ask
+  reset_stream_state
+  ! process_stream_line 'not json'
+  ! process_stream_line '[1, 2]'
+  ! process_stream_line '"a string"'
+  ! process_stream_line '{"type": "assistant", "message": "not an object"}'
+  ! process_stream_line '{"no": "type"}'
+  process_stream_line '{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"s"}'
+  [ "$model" = "opus 5.5" ]
+  [ "$session_id" = "s" ]
+}
+
+@test "parser: a NUL in the text does not put it out of step" {
+  source_claude_ask
+  reset_stream_state
+  process_stream_line '{"type":"assistant","message":{"content":[{"type":"text","text":"a\u0000b"}]}}'
+  [ "$CHUNK" = "ab" ]
+  process_stream_line '{"type":"result","is_error":false,"result":"done","total_cost_usd":0.5,"duration_ms":10}'
+  [ "$cost" = "0.5" ]
+  [ "$status" = "done" ]
+}
+
+@test "parser: newlines between JSON tokens are read as one line" {
+  source_claude_ask
+  reset_stream_state
+  process_stream_line $'{"type":"assistant",\n"message":{"content":[{"type":"text","text":"x\\ny"}]}}'
+  [ "$CHUNK" = $'x\ny' ]
+  process_stream_line '{"type":"system","subtype":"init","model":"claude-haiku-5-5"}'
+  [ "$model" = "haiku 5.5" ]
+}
+
+@test "parser: one jq serves every event, and a dead one is started again" {
+  source_claude_ask
+  reset_stream_state
+  process_stream_line '{"type":"system","subtype":"init","model":"claude-opus-5-5"}'
+  local pid="$STREAM_JQ_PID"
+  process_stream_line '{"type":"system","subtype":"init","model":"claude-sonnet-5-5"}'
+  [ "$STREAM_JQ_PID" = "$pid" ]
+  kill "$pid"
+  wait "$pid" 2> /dev/null || true
+  process_stream_line '{"type":"system","subtype":"init","model":"claude-haiku-5-5"}'
+  [ "$model" = "haiku 5.5" ]
+  [ "$STREAM_JQ_PID" != "$pid" ]
+  stop_stream_jq
+}
+
+@test "parser: jq ignores SIGINT" {
+  source_claude_ask
+  reset_stream_state
+  process_stream_line '{"type":"system","subtype":"init","model":"claude-opus-5-5"}'
+  local pid="$STREAM_JQ_PID"
+  kill -INT "$pid"
+  sleep 0.2
+  kill -0 "$pid"
+  stop_stream_jq
+}
+
+@test "parser: no jq is left behind when the script exits" {
+  local log="$TEST_TEMP_DIR/debug.log" pid
+  run "$SCRIPT_PATH" --no-pager --debug-log="$log" "question"
+  [ "$status" -eq 0 ]
+  pid=$(sed -n 's/.*stream parser started: pid=\([0-9]*\).*/\1/p' "$log" | head -1)
+  [ -n "$pid" ]
+  sleep 0.2
+  ! kill -0 "$pid" 2> /dev/null
+}
