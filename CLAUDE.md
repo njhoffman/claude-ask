@@ -38,9 +38,13 @@ through a pager with a themed status bar redrawn just below the streamed text
   `chat_prompt` puts `LAST_MODEL` (or `MODEL`) and `EFFORT` in the prompt;
   `chat_inputrc` gives readline bracketed paste off and Tab as tab-insert,
   and `chat_loop` gathers pasted lines already waiting into one question
-  (at a terminal only). At a terminal `chat_bind_tab` binds Tab to
-  `chat_tab` with `bind -x` (which needs `set -o emacs` in a script; the
-  inputrc's editing-mode still wins): `chat_complete LINE POINT` (before
+  (at a terminal only). At a terminal `chat_bind_keys` binds Tab to
+  `chat_tab` and Ctrl-C to `chat_ctrl_c` with `bind -x` (which needs
+  `set -o emacs` in a script; the inputrc's editing-mode still wins).
+  `chat_read` reads each prompt line with the tty's intr key undefined
+  (a trapped SIGINT does not end `read -e`) and restores `CHAT_STTY`
+  after; `cleanup` restores it too, and QUIT and TERM are trapped so it
+  runs. `chat_complete LINE POINT` (before
   the guard, unit-tested) completes `/commands` and their arguments or
   inserts a tab, and `CHAT_TAB_LITERAL` makes it a plain tab at a paste's
   continuation lines. `bind -x` runs inside `IFS= read`, so IFS is empty
@@ -89,6 +93,9 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Runtime files**: one private `mktemp -d` per run (under
   `$XDG_RUNTIME_DIR`) holds the pager FIFO, the raw stream and `claude`'s
   stderr; `cleanup` removes it.
+- **Traps**: write `return 0`, never a bare `return`, in anything
+  `cleanup` or the traps call: in a trap a bare `return` gives the status
+  from before the trap, and under `set -e` that aborts the handler.
 - **Renderers and format helpers** write into the variable named by their
   first argument (like `printf -v`), so a redraw forks nothing; their locals
   all start with `_`, so output variable names must not.

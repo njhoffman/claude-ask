@@ -10,8 +10,9 @@
 # /model [NAME] show or change the effort level and model for the next
 # questions ("default" clears them); /yank [code [N]] copies the last answer
 # or its code blocks; /help lists the rest, and Tab completes them; exit,
-# quit or Ctrl-D ends the chat; Ctrl-C stops the current answer. Piped input
-# with no question is read as one question.
+# quit or Ctrl-D ends the chat; Ctrl-C stops the current answer (at the
+# prompt, it clears the line). Piped input with no question is read as one
+# question.
 #
 # Options:
 #   -i, --interactive  Keep the chat open after answering the question
@@ -140,8 +141,10 @@ SPLIT_DIR="auto" # h, v or auto
 # ---------------------------------------------------------------------------
 # Debug logging (must be defined before arg parsing)
 # ---------------------------------------------------------------------------
+# return 0, not return: in a trap a bare return gives the status from before
+# the trap, and under set -e that ended cleanup at its first line
 debug_log() {
-  [[ -z "${DEBUG_LOG:-}" ]] && return
+  [[ -z "${DEBUG_LOG:-}" ]] && return 0
   local now="$EPOCHREALTIME" # seconds.microseconds, no date(1) needed
   local frac="${now#*[.,]}"
   printf '[%(%H:%M:%S)T.%s] %s\n' "${now%[.,]*}" "${frac:0:3}" "$*" >> "$DEBUG_LOG"
@@ -1588,7 +1591,7 @@ history_records() {
   local f one=()
   HISTORY_RECORDS=()
   mapfile -d '' -t HISTORY_RECORDS < <(jq -n -j "$HISTORY_JQ" "$@" 2> /dev/null)
-  ((${#HISTORY_RECORDS[@]} == 5 * $#)) && return
+  ((${#HISTORY_RECORDS[@]} == 5 * $#)) && return 0
   debug_log "history: one jq for $# files gave ${#HISTORY_RECORDS[@]} fields, reading each file"
   HISTORY_RECORDS=()
   for f in "$@"; do
@@ -1797,7 +1800,7 @@ STREAM_START=0
 
 emit_text() {
   local text="$1"
-  [[ -z "$text" ]] && return
+  [[ -z "$text" ]] && return 0
   printf '%s' "$text"
   # Track column position after last newline
   if [[ "$text" == *$'\n'* ]]; then
@@ -1909,6 +1912,8 @@ cleanup() {
   if [[ -n "$CLAUDE_PID" ]]; then kill "$CLAUDE_PID" 2> /dev/null || true; fi
   stop_stream_jq
   if [[ -n "$BAT_OUT_FD" ]]; then exec {BAT_OUT_FD}<&- 2> /dev/null || true; fi
+  # The intr key, if the chat prompt had it undefined
+  if [[ -n "${CHAT_STTY:-}" ]]; then stty "$CHAT_STTY" 2> /dev/null || true; fi
   rm -rf "$RUN_DIR" 2> /dev/null || true
 }
 # Ctrl-C: in a chat it stops the answer being streamed (or clears the prompt
@@ -1926,6 +1931,8 @@ on_interrupt() {
 trap cleanup EXIT
 trap on_interrupt INT
 trap 'exit 143' TERM
+# Ctrl-\ too, so cleanup puts back the intr key the chat prompt undefines
+trap 'exit 131' QUIT
 # Re-read the width on a resize; a trapped WINCH does not cut a read short
 trap read_term_cols WINCH
 
@@ -1970,7 +1977,7 @@ write_chunk() {
 # pager has only partly written is printed as far as it goes instead of
 # stalling the status bar until the pager finishes it.
 drain_bat() {
-  [[ -z "$BAT_OUT_FD" ]] && return
+  [[ -z "$BAT_OUT_FD" ]] && return 0
   local bat_line
   while true; do
     bat_line=""
@@ -1986,7 +1993,7 @@ drain_bat() {
 
 # Drain all remaining pager output (blocking until EOF)
 drain_bat_final() {
-  [[ -z "$BAT_OUT_FD" ]] && return
+  [[ -z "$BAT_OUT_FD" ]] && return 0
   local bat_line
   # The || keeps a last line that has no trailing newline
   while IFS= read -r bat_line <&"${BAT_OUT_FD}" || [[ -n "$bat_line" ]]; do
@@ -2450,14 +2457,47 @@ chat_tab() {
   fi
 }
 
-# Bind Tab to chat_tab (at a terminal only). bind needs line editing, which
-# a script does not have until set -o emacs; the inputrc's editing-mode
-# still wins, so vi users keep vi mode (Tab is bound in vi-insert too).
-chat_bind_tab() {
+# Ctrl-C at the chat prompt, bound with bind -x: the line so far is shown
+# with ^C after it and cleared, as a shell does, and the prompt starts again
+# at once. The prompt reads with the terminal's intr key undefined
+# (chat_read), so Ctrl-C reaches readline as a key: a trapped SIGINT does
+# not end read -e, which kept reading until Enter.
+CHAT_PROMPT_SHOWN=""
+# shellcheck disable=SC2317 # called by readline (bind -x)
+chat_ctrl_c() {
+  printf '%s%s^C\n' "$CHAT_PROMPT_SHOWN" "$READLINE_LINE" >&2
+  READLINE_LINE=""
+  READLINE_POINT=0
+}
+
+# Bind Tab to chat_tab and Ctrl-C to chat_ctrl_c (at a terminal only), and
+# keep the terminal settings in CHAT_STTY for chat_read to restore. bind
+# needs line editing, which a script does not have until set -o emacs; the
+# inputrc's editing-mode still wins, so vi users keep vi mode (the keys are
+# bound in the vi keymaps too).
+CHAT_STTY=""
+chat_bind_keys() {
   [[ -t 0 ]] || return 0
   set -o emacs
   bind -x '"\t": chat_tab' 2> /dev/null || true
   bind -m vi-insert -x '"\t": chat_tab' 2> /dev/null || true
+  local map
+  for map in emacs vi-insert vi-command; do
+    bind -m "$map" -x '"\C-c": chat_ctrl_c' 2> /dev/null || true
+  done
+  CHAT_STTY=$(stty -g 2> /dev/null) || CHAT_STTY=""
+}
+
+# chat_read VAR PROMPT: read a line at the chat prompt into VAR. At a
+# terminal the intr key is undefined for the read (Ctrl-C is chat_ctrl_c's
+# key there) and put back after it, so Ctrl-C still stops an answer.
+chat_read() {
+  local _rc=0
+  CHAT_PROMPT_SHOWN="${2//[$'\001\002']/}"
+  if [[ -n "$CHAT_STTY" ]]; then stty intr undef 2> /dev/null || true; fi
+  IFS= read -r -e -p "$2" "$1" || _rc=$?
+  if [[ -n "$CHAT_STTY" ]]; then stty "$CHAT_STTY" 2> /dev/null || true; fi
+  return "$_rc"
 }
 
 # OUT: the chat prompt, "opus 5.5 · high > ", with what is known in front,
@@ -2486,7 +2526,7 @@ chat_loop() {
   local line rc eof=0 trimmed prompt more pasted
   local cont=$'\001'"${FG_DIM}"$'\002''. '$'\001'"${RST}"$'\002'
   chat_inputrc
-  chat_bind_tab
+  chat_bind_keys
 
   mkdir -p "$STATE_DIR"
   HISTFILE="$CHAT_HISTORY_FILE"
@@ -2501,9 +2541,9 @@ chat_loop() {
     rc=0
     TURN_INTERRUPTED=0
     chat_prompt prompt
-    IFS= read -r -e -p "$prompt" line || rc=$?
+    chat_read line "$prompt" || rc=$?
     if ((rc > 128 || TURN_INTERRUPTED)); then
-      # Ctrl-C at the prompt: drop the line, prompt again
+      # A SIGINT at the prompt (chat_ctrl_c handles Ctrl-C): drop the line
       printf '\n'
       continue
     fi
@@ -2524,7 +2564,7 @@ chat_loop() {
       CHAT_TAB_LITERAL=1
       while read -r -t 0; do
         more=""
-        IFS= read -r -e -p "$cont" more || break
+        chat_read more "$cont" || break
         line+=$'\n'"$more"
         pasted=1
       done

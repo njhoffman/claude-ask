@@ -173,7 +173,7 @@ Reviewed: 2026-11-03
   after the answer, `-+F` with a `LESS` that has `-F`, and the popup closing
   on quit or `/quit`. Check it by hand, or drive an attached client in a
   test (a `script`-run `tmux attach` on the private server).
-- [ ] **Ctrl-C at the chat prompt drops the line only at Enter.** (p3)
+- [x] **Ctrl-C at the chat prompt drops the line only at Enter.** (p3)
   [bug] The SIGINT trap sets `TURN_INTERRUPTED`, but a trapped signal does
   not interrupt `read -e`, so `abc` Ctrl-C shows `^C` and keeps reading:
   what is typed next is added to `abc`, and the whole line is dropped only

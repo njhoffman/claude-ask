@@ -6,6 +6,18 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-03
+
+### Fixed
+
+- Ctrl-C at the chat prompt clears the line at once and starts a new
+  prompt. Before, it showed `^C` and kept reading: what was typed next was
+  added to the line, and all of it was dropped only at Enter.
+- A run ended by a signal (SIGTERM, or Ctrl-C outside a chat) cleans up
+  again: the cleanup stopped at its first line, leaving the runtime
+  directory behind and `claude` and the pager running.
+- Ctrl-\ (SIGQUIT) ends the run through the same cleanup.
+
 ## [0.8.0] - 2026-11-03
 
 ### Added

@@ -119,3 +119,41 @@ pty_chat() {
   [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
   grep -qF "$(printf '| look:\\n/e\tx')" "$CLAUDE_STUB_LOG"
 }
+
+@test "pty: Ctrl-C at the prompt drops the line at once" {
+  pty_chat 'expect:> ' 'send:abc' 'expect:> abc' 'send:\x03' 'expect:abc^C' 'send:xyz\r' 'expect:chunks' 'expect:> ' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  # Only what was typed after Ctrl-C was asked
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+  grep -qF '| xyz' "$CLAUDE_STUB_LOG"
+  ! grep -qF 'abc' "$CLAUDE_STUB_LOG"
+}
+
+@test "pty: Ctrl-C at the prompt works in vi mode" {
+  printf 'set editing-mode vi\n' > "$INPUTRC"
+  pty_chat 'expect:> ' 'send:abc' 'expect:> abc' 'send:\x03' 'expect:abc^C' 'send:xyz\r' 'expect:chunks' 'expect:> ' 'send:exit\r'
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+  grep -qF '| xyz' "$CLAUDE_STUB_LOG"
+}
+
+@test "pty: Ctrl-C still stops an answer, and the chat goes on" {
+  export CLAUDE_STUB_DELAY=0.4
+  pty_chat 'expect:> ' 'send:q\r' 'expect:connecting' 'sleep:0.5' 'send:\x03' 'expect:(interrupted)' 'expect:> ' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  [[ "$output_clean" == *"(interrupted)"* ]]
+}
+
+@test "pty: Ctrl-\\ at the prompt ends the chat and puts the intr key back" {
+  run python3 "$PTY" 'expect:> ' 'send:\x1c' 'sleep:1.5' -- bash -c \
+    "'$SCRIPT_PATH' --no-pager; echo status=\$?; stty -a | grep -o 'intr = [^;]*'"
+  output_clean=$(printf '%s' "$output" | strip_ansi | tr -d '\001\002\r')
+  [[ "$output_clean" == *"status=131"* ]]
+  [[ "$output_clean" == *"intr = ^C"* ]]
+}
+
+@test "pty: the intr key is put back when the chat is killed at the prompt" {
+  run python3 "$PTY" 'expect:> ' 'sleep:2.5' -- bash -c \
+    "timeout --foreground -s TERM 1 '$SCRIPT_PATH' --no-pager; stty -a | grep -o 'intr = [^;]*'"
+  output_clean=$(printf '%s' "$output" | strip_ansi | tr -d '\001\002\r')
+  [[ "$output_clean" == *"intr = ^C"* ]]
+}

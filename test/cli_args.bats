@@ -181,6 +181,21 @@ load test_helper
   [ -z "$(ls -A "$XDG_RUNTIME_DIR")" ]
 }
 
+@test "a SIGTERM mid-answer still removes the runtime files" {
+  export CLAUDE_STUB_DELAY=1
+  "$SCRIPT_PATH" "test" --no-pager > /dev/null 2>&1 &
+  local pid=$!
+  # The runtime dir exists once the run has started
+  for _ in $(seq 50); do [ -n "$(ls -A "$XDG_RUNTIME_DIR")" ] && break; sleep 0.1; done
+  [ -n "$(ls -A "$XDG_RUNTIME_DIR")" ]
+  sleep 0.3
+  kill -TERM "$pid"
+  local rc=0
+  wait "$pid" || rc=$?
+  [ "$rc" -eq 143 ]
+  [ -z "$(ls -A "$XDG_RUNTIME_DIR")" ]
+}
+
 # ---------------------------------------------------------------------------
 # Errors from claude
 # ---------------------------------------------------------------------------
