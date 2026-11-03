@@ -91,3 +91,31 @@ pty_chat() {
   pty_chat 'expect:opus 5.5 · high > ' 'send:exit\r' -- --resume=saved
   [[ "$output_clean" == *"opus 5.5 · high > "* ]]
 }
+
+@test "pty: Tab completes a command and its argument" {
+  pty_chat 'expect:> ' 'send:/eff\t' 'expect:/effort ' 'send:hi\t\r' 'expect:effort: high' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  [[ "$output_clean" == *"effort: high"* ]]
+  [[ "$output_clean" == *"high > "* ]]
+}
+
+@test "pty: Tab on an ambiguous prefix lists the matches" {
+  pty_chat 'expect:> ' 'send:/e\t' 'expect:/effort /editor /exit' 'send:x\t\r'
+  [ "$status" -eq 0 ]
+  [[ "$output_clean" == *"/effort /editor /exit"* ]]
+  # /ex completed to /exit, which ended the chat
+  [ ! -s "${CLAUDE_STUB_LOG}" ]
+}
+
+@test "pty: Tab completes in vi mode too" {
+  printf 'set editing-mode vi\n' > "$INPUTRC"
+  pty_chat 'expect:> ' 'send:/the\t' 'expect:/theme ' 'send:pow\t\r' 'expect:theme: powerline' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  [[ "$output_clean" == *"theme: powerline"* ]]
+}
+
+@test "pty: a tab in a pasted line after the first is never completed" {
+  pty_chat 'expect:> ' 'send:look:\r/e\tx\r' 'expect:chunks' 'expect:> ' 'send:exit\r'
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+  grep -qF "$(printf '| look:\\n/e\tx')" "$CLAUDE_STUB_LOG"
+}

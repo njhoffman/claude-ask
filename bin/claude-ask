@@ -9,9 +9,9 @@
 # At the prompt, \e composes the question in $EDITOR; /effort [LEVEL] and
 # /model [NAME] show or change the effort level and model for the next
 # questions ("default" clears them); /yank [code [N]] copies the last answer
-# or its code blocks; /help lists the rest; exit, quit or Ctrl-D ends the
-# chat; Ctrl-C stops the current answer. Piped input with no question is read as
-# one question.
+# or its code blocks; /help lists the rest, and Tab completes them; exit,
+# quit or Ctrl-D ends the chat; Ctrl-C stops the current answer. Piped input
+# with no question is read as one question.
 #
 # Options:
 #   -i, --interactive  Keep the chat open after answering the question
@@ -1049,6 +1049,59 @@ newest_session_file() {
 # and each half keeps 80 columns, else "v" (one above the other)
 split_direction() {
   if (($1 > 2 * $2 && $1 / 2 >= 80)); then printf h; else printf v; fi
+}
+
+# ---------------------------------------------------------------------------
+# Tab completion at the chat prompt
+# ---------------------------------------------------------------------------
+CHAT_COMMANDS=(/help /effort /model /theme /yank /status /new /editor /exit /quit)
+CHAT_MODEL_ALIASES=(opus sonnet haiku fable default)
+CHAT_THEMES=(minimal bubbles powerline)
+
+# chat_complete LINE POINT: what Tab does with the cursor at POINT in LINE.
+# A /command name before the cursor, or the argument of /effort, /model,
+# /theme or /yank, is completed: one match in full (and a space), several
+# as far as they agree. COMPLETE_LINE and COMPLETE_POINT are the line and
+# cursor after it; COMPLETE_LIST holds the matches when Tab cannot extend
+# them, to show. Anywhere else, or when nothing matches, Tab inserts a tab,
+# so one in a pasted line is kept.
+chat_complete() {
+  local line="$1" point="$2" before word="" c add
+  local -a cands=() matches=()
+  before="${line:0:point}"
+  COMPLETE_LIST=()
+  if [[ "$before" =~ ^/[a-z]*$ ]]; then
+    word="$before"
+    cands=("${CHAT_COMMANDS[@]}")
+  elif [[ "$before" =~ ^(/[a-z]+)[[:space:]]+([a-z0-9.-]*)$ ]]; then
+    word="${BASH_REMATCH[2]}"
+    case "${BASH_REMATCH[1]}" in
+      /effort) IFS=" " read -ra cands <<< "${EFFORT_LEVELS//,/} default" ;;
+      /model) cands=("${CHAT_MODEL_ALIASES[@]}") ;;
+      /theme) cands=("${CHAT_THEMES[@]}") ;;
+      /yank) cands=(code) ;;
+    esac
+  fi
+  for c in "${cands[@]}"; do
+    if [[ "$c" == "$word"* ]]; then matches+=("$c"); fi
+  done
+
+  if ((${#matches[@]} == 0)); then
+    add=$'\t'
+  elif ((${#matches[@]} == 1)); then
+    add="${matches[0]#"$word"}"
+    if [[ "${line:point:1}" != [[:space:]] ]]; then add+=" "; fi
+  else
+    # The longest prefix all the matches share, past what is typed
+    add="${matches[0]}"
+    for c in "${matches[@]:1}"; do
+      while [[ "$c" != "$add"* ]]; do add="${add%?}"; done
+    done
+    add="${add#"$word"}"
+    if [[ -z "$add" ]]; then COMPLETE_LIST=("${matches[@]}"); fi
+  fi
+  COMPLETE_LINE="$before$add${line:point}"
+  COMPLETE_POINT=$((point + ${#add}))
 }
 
 # ---------------------------------------------------------------------------
@@ -2265,7 +2318,8 @@ chat_help() {
 /new               start a new conversation
 /editor, \\e        compose the question in \$EDITOR
 /exit, /quit       end the chat (also exit, quit, Ctrl-D)
-Effort and model apply from the next question on."
+Tab completes a command and its argument. Effort and model apply from the
+next question on."
 }
 
 chat_status() {
@@ -2360,7 +2414,8 @@ chat_command() {
 # Bracketed paste is off: with it on, read -e keeps the first line of a
 # multi-line paste and drops the rest, while without it each pasted line is
 # read on its own and chat_loop gathers them into one question. Tab inserts
-# a tab, so one in pasted code is not taken for file name completion.
+# a tab, so one in pasted code is not taken for file name completion; at a
+# terminal chat_loop then binds it to chat_tab instead.
 chat_inputrc() {
   local f="$RUN_DIR/inputrc" own="${INPUTRC:-$HOME/.inputrc}"
   if [[ ! -r "$own" ]]; then own=/etc/inputrc; fi
@@ -2370,6 +2425,39 @@ chat_inputrc() {
     printf '%s\n' 'set enable-bracketed-paste off' '"\t": tab-insert'
   } > "$f"
   INPUTRC="$f"
+}
+
+# Tab at the chat prompt, bound with bind -x: chat_complete on readline's
+# line, the matches listed (dim) when it cannot go further. At the ". "
+# lines of a paste (CHAT_TAB_LITERAL) it only inserts a tab. bash clears
+# the prompt line before running it and redraws it after, so the list
+# takes that line.
+CHAT_TAB_LITERAL=0
+# shellcheck disable=SC2317 # called by readline (bind -x)
+chat_tab() {
+  # It runs inside chat_loop's "IFS= read", so IFS is empty here
+  local IFS=$' \t\n'
+  if ((CHAT_TAB_LITERAL)); then
+    READLINE_LINE="${READLINE_LINE:0:READLINE_POINT}"$'\t'"${READLINE_LINE:READLINE_POINT}"
+    READLINE_POINT=$((READLINE_POINT + 1))
+    return 0
+  fi
+  chat_complete "$READLINE_LINE" "$READLINE_POINT"
+  READLINE_LINE="$COMPLETE_LINE"
+  READLINE_POINT="$COMPLETE_POINT"
+  if ((${#COMPLETE_LIST[@]})); then
+    printf '%s%s%s\n' "$FG_DIM" "${COMPLETE_LIST[*]}" "$RST" >&2
+  fi
+}
+
+# Bind Tab to chat_tab (at a terminal only). bind needs line editing, which
+# a script does not have until set -o emacs; the inputrc's editing-mode
+# still wins, so vi users keep vi mode (Tab is bound in vi-insert too).
+chat_bind_tab() {
+  [[ -t 0 ]] || return 0
+  set -o emacs
+  bind -x '"\t": chat_tab' 2> /dev/null || true
+  bind -m vi-insert -x '"\t": chat_tab' 2> /dev/null || true
 }
 
 # OUT: the chat prompt, "opus 5.5 · high > ", with what is known in front,
@@ -2398,6 +2486,7 @@ chat_loop() {
   local line rc eof=0 trimmed prompt more pasted
   local cont=$'\001'"${FG_DIM}"$'\002''. '$'\001'"${RST}"$'\002'
   chat_inputrc
+  chat_bind_tab
 
   mkdir -p "$STATE_DIR"
   HISTFILE="$CHAT_HISTORY_FILE"
@@ -2432,12 +2521,14 @@ chat_loop() {
     # piped chat input is one question per line.
     pasted=0
     if ((rc == 0)) && [[ -t 0 ]]; then
+      CHAT_TAB_LITERAL=1
       while read -r -t 0; do
         more=""
         IFS= read -r -e -p "$cont" more || break
         line+=$'\n'"$more"
         pasted=1
       done
+      CHAT_TAB_LITERAL=0
     fi
 
     trimmed="${line#"${line%%[![:space:]]*}"}"

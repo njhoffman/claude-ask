@@ -6,6 +6,21 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-03
+
+### Added
+
+- Tab at the chat prompt completes the `/command` names and the arguments
+  of `/effort`, `/model`, `/theme` and `/yank`, and lists the matches when
+  there are several. Elsewhere, and on every line of a paste after the
+  first, it still inserts a tab. It works in emacs and vi mode.
+- Shell completion for zsh (`completions/_claude-ask`) and bash
+  (`completions/claude-ask.bash`): the options, effort levels, models,
+  themes, `--split=` directions, and saved session names for `--session`
+  and `--resume=`. `just install` links them into
+  `~/.local/share/zsh/site-functions` and
+  `~/.local/share/bash-completion/completions`.
+
 ## [0.7.0] - 2026-11-03
 
 ### Added

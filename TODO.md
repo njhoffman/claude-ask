@@ -146,7 +146,7 @@ Reviewed: 2026-11-03
   Put a short form in the prompt (`opus 5.5 · high > `), dim, or print it
   after each change (already done) and at chat start next to the `/help`
   hint.
-- [ ] **Tab completion for chat commands.** (p3) [feature] Since 0.7.0 Tab
+- [x] **Tab completion for chat commands.** (p3) [feature] Since 0.7.0 Tab
   at the chat prompt inserts a tab (`chat_inputrc`), so a Tab in pasted code
   is kept now that bracketed paste is off; completion needs another key.
   Bind one (say `M-/` or a second Tab press) to complete the `/word`
@@ -154,7 +154,7 @@ Reviewed: 2026-11-03
   non-interactive `read -e` can run it (`bind -x` does not take effect in a
   script; a readline macro in the INPUTRC file might), or note that it
   cannot.
-- [ ] **Shell completion for the options.** (p3) [feature] No bash or zsh
+- [x] **Shell completion for the options.** (p3) [feature] No bash or zsh
   completion for `--theme`, `-e`, `-m`, `--session` (session names) and the
   rest. Add `completions/_claude-ask` (zsh) and a bash one, installed by
   `just install`.
@@ -173,3 +173,10 @@ Reviewed: 2026-11-03
   after the answer, `-+F` with a `LESS` that has `-F`, and the popup closing
   on quit or `/quit`. Check it by hand, or drive an attached client in a
   test (a `script`-run `tmux attach` on the private server).
+- [ ] **Ctrl-C at the chat prompt drops the line only at Enter.** (p3)
+  [bug] The SIGINT trap sets `TURN_INTERRUPTED`, but a trapped signal does
+  not interrupt `read -e`, so `abc` Ctrl-C shows `^C` and keeps reading:
+  what is typed next is added to `abc`, and the whole line is dropped only
+  when Enter is pressed (0.7.0 does the same). Make Ctrl-C end the read at
+  once (no trap while reading, so readline's own SIGINT handling clears the
+  line, or `bind -x` on `\C-c` emptying `READLINE_LINE`), and add a pty test.

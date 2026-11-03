@@ -59,8 +59,13 @@ width it is fitted to.
 The prompt shows the model and the effort level, e.g. `opus 5.5 · high > `:
 the model that answered last, or the one `-m` or `/model` asks for until it
 answers. A multi-line paste is asked as one question (its lines show at a
-`. ` prompt); for that the chat turns bracketed paste off and makes Tab
-insert a tab, on top of your own readline settings.
+`. ` prompt); for that the chat turns bracketed paste off, on top of your
+own readline settings (emacs or vi mode).
+
+Tab completes the command names and the arguments of `/effort`, `/model`,
+`/theme` and `/yank`, and lists the choices when there are several (`/`
+then Tab lists every command). Anywhere else it inserts a tab, as it does
+at every line of a paste after the first, so tabs in pasted code are kept.
 
 In a chat, these commands work at the prompt:
 
@@ -109,8 +114,16 @@ it is a chat until `/quit`. Both pass on the other options and the
 ## Install
 
 ```sh
-just install    # symlinks bin/claude-ask into ~/.local/bin
+just install    # symlinks bin/claude-ask into ~/.local/bin, and the completions
 ```
+
+The shell completions (options, effort levels, models, themes, and saved
+session names for `--session` and `--resume=`) are `completions/_claude-ask`
+for zsh, linked into `~/.local/share/zsh/site-functions` (which must be in
+`fpath`; run `rm ~/.zcompdump*; compinit` once if zsh had cached its list),
+and `completions/claude-ask.bash` for bash, linked into
+`~/.local/share/bash-completion/completions` (`BASH_COMPLETION_USER_DIR`),
+where bash-completion loads it; without bash-completion, source it.
 
 ## Development
 

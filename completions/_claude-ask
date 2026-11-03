@@ -1,0 +1,46 @@
+#compdef claude-ask
+# zsh completion for claude-ask; `just install` links it into
+# ${XDG_DATA_HOME:-~/.local/share}/zsh/site-functions, which must be in fpath
+
+# Saved session names (for --session and --resume=), newest first, as
+# --history numbers them
+_claude-ask_sessions() {
+  local dir=${SESSION_DIR:-$HOME/.local/share/claude/cli-sessions}
+  local -a files names
+  files=( $dir/*.json(N.om) )
+  names=( ${${files:t}%.json} )
+  _describe -V -t sessions 'saved session' names
+}
+
+_claude-ask() {
+  local -a efforts=(low medium high xhigh max)
+  local -a models=(opus sonnet haiku fable)
+  local -a themes=(minimal bubbles powerline)
+
+  _arguments -s -S \
+    '(-i --interactive)'{-i,--interactive}'[keep the chat open after the answer]' \
+    '(--resume)-r[continue the newest saved session]' \
+    '(-r)--resume=-[continue the newest saved session, or the one named]::session:_claude-ask_sessions' \
+    '(-e --effort)'{-e,--effort}"[effort (thinking) level]:level:($efforts)" \
+    '(-m --model)'{-m,--model}"[model alias or full name]:model:($models)" \
+    '(-y --yank -Y --yank-code)'{-y,--yank}'[copy the answer to the clipboard]' \
+    '(-y --yank --yank-code)-Y[copy the code blocks of the answer]' \
+    '(-y --yank -Y)--yank-code=-[copy the code blocks of the answer (only the Nth)]::block number: ' \
+    '(--popup)--split=-[run in a new tmux pane]::direction:((h\:side\ by\ side v\:one\ above\ the\ other auto\:from\ the\ shape\ of\ the\ pane))' \
+    '(--split)--popup[run in a tmux popup]' \
+    "--theme[status bar theme]:theme:($themes)" \
+    '(--no-pager)--pager[pager command, run with bash -c]:pager command:_command_names -e' \
+    '(--pager)--no-pager[print plain text, no pager]' \
+    '--demo-themes[show example status bars and exit]' \
+    '--demo-output[simulate streamed answers and exit]' \
+    '--no-stream[show the answer when it is complete]' \
+    '--save-raw[also save the raw JSON stream]' \
+    '--history[list saved sessions]' \
+    '--session[view a saved session]::session:_claude-ask_sessions' \
+    '--debug-log=-[write debug messages to a file]::file:_files' \
+    '(- *)--version[print the version and exit]' \
+    '(- *)'{-h,--help}'[show the help and exit]' \
+    '*::question: '
+}
+
+_claude-ask "$@"

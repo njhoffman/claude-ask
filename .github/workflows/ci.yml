@@ -16,10 +16,10 @@ jobs:
       - uses: actions/checkout@v7
 
       # jq, shellcheck and script (util-linux) are in the runner image
-      - name: Install bats, just and bc
+      - name: Install bats, just, bc and zsh
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q bats just bc
+          sudo apt-get install -y -q bats just bc zsh
 
       - name: Tool versions
         run: |
@@ -28,6 +28,7 @@ jobs:
           shellcheck --version | sed -n 2p
           bats --version
           just --version
+          zsh --version
 
       - name: Lint
         run: just lint

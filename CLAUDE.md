@@ -9,7 +9,9 @@ through a pager with a themed status bar redrawn just below the streamed text
 
 - `just test` (or `bats test/`) runs the suite; `bats test/<file>.bats` one file.
 - `just lint` runs shellcheck on the script.
-- `just install` symlinks `bin/claude-ask` into `~/.local/bin`.
+- `just install` symlinks `bin/claude-ask` into `~/.local/bin` and the
+  completions (`completions/_claude-ask` for zsh, `completions/claude-ask.bash`
+  for bash) where zsh and bash-completion look.
 
 ## Architecture
 
@@ -36,7 +38,13 @@ through a pager with a themed status bar redrawn just below the streamed text
   `chat_prompt` puts `LAST_MODEL` (or `MODEL`) and `EFFORT` in the prompt;
   `chat_inputrc` gives readline bracketed paste off and Tab as tab-insert,
   and `chat_loop` gathers pasted lines already waiting into one question
-  (at a terminal only). `test/chat_terminal.bats` drives a pseudo-terminal
+  (at a terminal only). At a terminal `chat_bind_tab` binds Tab to
+  `chat_tab` with `bind -x` (which needs `set -o emacs` in a script; the
+  inputrc's editing-mode still wins): `chat_complete LINE POINT` (before
+  the guard, unit-tested) completes `/commands` and their arguments or
+  inserts a tab, and `CHAT_TAB_LITERAL` makes it a plain tab at a paste's
+  continuation lines. `bind -x` runs inside `IFS= read`, so IFS is empty
+  there. `test/chat_terminal.bats` drives a pseudo-terminal
   with `test/helpers/pty_run.py`.
   `chat_command` runs the `/word` commands (`/help`, `/effort`, `/model`,
   `/theme`, `/status`, `/new`, `/exit`); a first word that is not `/[a-z]+`
@@ -91,8 +99,12 @@ through a pager with a themed status bar redrawn just below the streamed text
   `test/stubs/claude`, which replays `CLAUDE_STUB_FIXTURE`; test files with
   their own `setup()` must call `common_setup` first.
 - `docs/claude-ask.example.json` is a recorded stream-json session.
+- **Shell completion**: `completions/`; they glob `SESSION_DIR` for session
+  names themselves. `test/completion.bats` calls the bash function, runs
+  the zsh file with `_arguments` stubbed, and checks both cover every
+  option in `--help`, so a new option needs adding to both.
 - CI: `.github/workflows/ci.yml` runs `just lint` and `just test` on
-  Ubuntu 24.04 (bats, just and bc from apt).
+  Ubuntu 24.04 (bats, just, bc and zsh from apt).
 
 ## Versioning
 
