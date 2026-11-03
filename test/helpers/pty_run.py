@@ -11,14 +11,20 @@ Steps, in order:
                 \\002 and carriage returns are left out (10s at most)
   sleep:SECS    wait
 
+PTY_SIZE=COLSxROWS in the environment sets the terminal size (default:
+whatever the pseudo-terminal starts with, often 0x0).
+
 The output (with escape sequences) goes to stdout. The exit status is the
 command's, or 124 when an expect step times out.
 """
+import fcntl
 import os
 import pty
 import re
 import select
+import struct
 import sys
+import termios
 import time
 
 
@@ -39,6 +45,10 @@ def main():
     steps, command = args[:split], args[split + 1:]
     pid, fd = pty.fork()
     if pid == 0:
+        size = os.environ.get("PTY_SIZE", "")
+        if size:
+            cols, rows = (int(n) for n in size.split("x"))
+            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         os.execvp(command[0], command)
     out = b""
 

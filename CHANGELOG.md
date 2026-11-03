@@ -6,6 +6,22 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-03
+
+### Fixed
+
+- `--popup` with a question whose answer fails no longer reports "tmux
+  could not start the popup": the popup did start. The run's own exit
+  status is passed on instead.
+
+### Changed
+
+- The pager pipeline's variables and functions are named after the pager
+  (`PAGER_PID`, `PAGER_FIFO`, `PAGER_OUT_FD`, `drain_pager`), not `bat`.
+- `--popup` is tested against a real tmux (a private server with a client
+  attached in a pseudo-terminal): the paging, `LESS=-F`, closing on quit
+  and on `/quit`, and a failed answer. CI installs tmux for it.
+
 ## [0.8.1] - 2026-11-03
 
 ### Fixed

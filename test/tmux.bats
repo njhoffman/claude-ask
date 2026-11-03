@@ -129,6 +129,24 @@ launch_call() {
   launch_call | grep -q -- " --yank"
 }
 
+@test "--popup: the run's own exit status is passed on, not called a tmux failure" {
+  export CLAUDE_STUB_TMUX_RUN=1 CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/result_error.jsonl"
+  export CLAUDE_ASK_POPUP_PAGER=cat
+  run "$SCRIPT_PATH" --popup "q" < /dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Invalid API key"* ]]
+  [[ "$output" != *"could not start"* ]]
+  [ -z "$(ls "$XDG_RUNTIME_DIR" | grep claude-ask-started)" ]
+}
+
+@test "--popup: when tmux fails it says so and removes its files" {
+  export CLAUDE_STUB_TMUX_EXIT=1
+  run "$SCRIPT_PATH" --popup "q"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"tmux could not start the popup"* ]]
+  [ -z "$(ls "$XDG_RUNTIME_DIR" | grep 'claude-ask-\(question\|started\)')" ]
+}
+
 @test "when tmux fails the question file is removed and it says so" {
   export CLAUDE_STUB_TMUX_EXIT=1
   run "$SCRIPT_PATH" --split "q"

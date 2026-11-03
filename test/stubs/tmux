@@ -9,6 +9,8 @@
 #                            their command with the -e variables (stdin from
 #                            /dev/null, output to this stub's output)
 #   CLAUDE_STUB_TMUX_EXIT    exit status of split-window and display-popup
+#                            (by default display-popup's is the command's, as
+#                            with -E)
 if [[ -n "${CLAUDE_STUB_TMUX_LOG:-}" ]]; then
   printf '%s\n' "$*" >> "$CLAUDE_STUB_TMUX_LOG"
 fi
@@ -20,6 +22,7 @@ case "$1" in
     cat > "${CLAUDE_STUB_TMUX_BUFFER:-/dev/null}"
     ;;
   split-window | display-popup)
+    call="$1"
     shift
     envs=()
     while [[ $# -gt 0 && "$1" != "--" ]]; do
@@ -40,9 +43,12 @@ case "$1" in
       esac
     done
     shift
+    rc=0
     if [[ -n "${CLAUDE_STUB_TMUX_RUN:-}" ]]; then
-      env "${envs[@]}" "$@" < /dev/null
+      env "${envs[@]}" "$@" < /dev/null || rc=$?
     fi
+    # display-popup -E waits for the command and returns its status
+    if [[ "$call" == display-popup && -z "${CLAUDE_STUB_TMUX_EXIT:-}" ]]; then exit "$rc"; fi
     exit "${CLAUDE_STUB_TMUX_EXIT:-0}"
     ;;
 esac

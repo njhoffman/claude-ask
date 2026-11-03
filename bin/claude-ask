@@ -368,6 +368,11 @@ question="${POSITIONAL[*]:-}"
 
 # --split and --popup hand the question to the new claude-ask in a private
 # temp file (a long piped question could be too big for a tmux command)
+# In a popup: tell launch_in_tmux the run started (see there)
+if [[ -n "${_CLAUDE_ASK_STARTED:-}" ]]; then
+  rm -f "$_CLAUDE_ASK_STARTED"
+  unset _CLAUDE_ASK_STARTED
+fi
 if [[ -n "${_CLAUDE_ASK_QUESTION_TMP:-}" ]]; then
   if [[ -z "$question" && -f "$_CLAUDE_ASK_QUESTION_TMP" ]]; then
     question=$(< "$_CLAUDE_ASK_QUESTION_TMP")
@@ -1848,7 +1853,7 @@ refresh_status_bar() {
   if [[ "$status" == "error" ]]; then spin_char="✗"; fi
 
   # Drain any rendered output from the pager before updating the status bar
-  drain_bat
+  drain_pager
 
   local disp_in disp_out disp_cost disp_dur label
   format_tokens disp_in "$input_tokens"
@@ -1895,9 +1900,9 @@ if [[ ! -d "$run_dir_base" || ! -w "$run_dir_base" ]]; then
 fi
 RUN_DIR=$(mktemp -d "${run_dir_base}/claude-ask.XXXXXX")
 
-BAT_PID=""
-BAT_FIFO=""
-BAT_OUT_FD=""
+PAGER_PID=""
+PAGER_FIFO=""
+PAGER_OUT_FD=""
 CLAUDE_PID=""
 
 # shellcheck disable=SC2317 # called by trap
@@ -1908,10 +1913,10 @@ cleanup() {
     printf '\e[J'
   fi
   printf '\e[?25h' # ensure cursor visible
-  if [[ -n "$BAT_PID" ]]; then kill "$BAT_PID" 2> /dev/null || true; fi
+  if [[ -n "$PAGER_PID" ]]; then kill "$PAGER_PID" 2> /dev/null || true; fi
   if [[ -n "$CLAUDE_PID" ]]; then kill "$CLAUDE_PID" 2> /dev/null || true; fi
   stop_stream_jq
-  if [[ -n "$BAT_OUT_FD" ]]; then exec {BAT_OUT_FD}<&- 2> /dev/null || true; fi
+  if [[ -n "$PAGER_OUT_FD" ]]; then exec {PAGER_OUT_FD}<&- 2> /dev/null || true; fi
   # The intr key, if the chat prompt had it undefined
   if [[ -n "${CHAT_STTY:-}" ]]; then stty "$CHAT_STTY" 2> /dev/null || true; fi
   rm -rf "$RUN_DIR" 2> /dev/null || true
@@ -1941,31 +1946,31 @@ trap read_term_cols WINCH
 # is read back here, so it can be drained in step with status bar updates
 # ---------------------------------------------------------------------------
 start_pager_pipe() {
-  BAT_FIFO="$RUN_DIR/pager.fifo"
-  mkfifo "$BAT_FIFO"
-  exec {BAT_OUT_FD}< <(run_pager < "$BAT_FIFO" 2> /dev/null)
-  BAT_PID=$!
-  exec 3> "$BAT_FIFO"
-  debug_log "pager pipeline: fifo=$BAT_FIFO pid=$BAT_PID out_fd=$BAT_OUT_FD"
+  PAGER_FIFO="$RUN_DIR/pager.fifo"
+  mkfifo "$PAGER_FIFO"
+  exec {PAGER_OUT_FD}< <(run_pager < "$PAGER_FIFO" 2> /dev/null)
+  PAGER_PID=$!
+  exec 3> "$PAGER_FIFO"
+  debug_log "pager pipeline: fifo=$PAGER_FIFO pid=$PAGER_PID out_fd=$PAGER_OUT_FD"
 }
 
 # Close the pager's input and print the rest of its output
 stop_pager_pipe() {
-  [[ -n "$BAT_OUT_FD" ]] || return 0
+  [[ -n "$PAGER_OUT_FD" ]] || return 0
   exec 3>&-
-  drain_bat_final
-  exec {BAT_OUT_FD}<&-
-  BAT_OUT_FD=""
-  wait "$BAT_PID" 2> /dev/null || true
-  BAT_PID=""
-  rm -f "$BAT_FIFO"
-  BAT_FIFO=""
+  drain_pager_final
+  exec {PAGER_OUT_FD}<&-
+  PAGER_OUT_FD=""
+  wait "$PAGER_PID" 2> /dev/null || true
+  PAGER_PID=""
+  rm -f "$PAGER_FIFO"
+  PAGER_FIFO=""
 }
 
 # Write a text chunk: through the pager if running, otherwise to the terminal
 write_chunk() {
   local chunk="$1"
-  if [[ -n "$BAT_OUT_FD" ]]; then
+  if [[ -n "$PAGER_OUT_FD" ]]; then
     printf '%s' "$chunk" >&3
   else
     emit_text "$chunk"
@@ -1976,28 +1981,28 @@ write_chunk() {
 # waits at most 10ms; on a timeout read keeps the text it got, so a line the
 # pager has only partly written is printed as far as it goes instead of
 # stalling the status bar until the pager finishes it.
-drain_bat() {
-  [[ -z "$BAT_OUT_FD" ]] && return 0
-  local bat_line
+drain_pager() {
+  [[ -z "$PAGER_OUT_FD" ]] && return 0
+  local pager_line
   while true; do
-    bat_line=""
-    if IFS= read -r -t 0.01 bat_line <&"${BAT_OUT_FD}"; then
-      emit_text "${bat_line}"$'\n'
+    pager_line=""
+    if IFS= read -r -t 0.01 pager_line <&"${PAGER_OUT_FD}"; then
+      emit_text "${pager_line}"$'\n'
     else
       # Timeout or EOF: print any partial line and stop
-      emit_text "$bat_line"
+      emit_text "$pager_line"
       break
     fi
   done
 }
 
 # Drain all remaining pager output (blocking until EOF)
-drain_bat_final() {
-  [[ -z "$BAT_OUT_FD" ]] && return 0
-  local bat_line
+drain_pager_final() {
+  [[ -z "$PAGER_OUT_FD" ]] && return 0
+  local pager_line
   # The || keeps a last line that has no trailing newline
-  while IFS= read -r bat_line <&"${BAT_OUT_FD}" || [[ -n "$bat_line" ]]; do
-    emit_text "${bat_line}"$'\n'
+  while IFS= read -r pager_line <&"${PAGER_OUT_FD}" || [[ -n "$pager_line" ]]; do
+    emit_text "${pager_line}"$'\n'
   done
 }
 
@@ -2181,7 +2186,7 @@ page_answer_in_popup() {
 # tmux runs it with the server's environment, so ours is passed on: PATH,
 # where sessions and state live, the editor and every CLAUDE_ASK_ variable.
 launch_in_tmux() {
-  local self child=() envs=() var qfile="" w h dir size
+  local self child=() envs=() var qfile="" started="" w h dir size
   self=$(readlink -f "${BASH_SOURCE[0]}")
   child=(--theme "$THEME")
   if [[ -n "$EFFORT" ]]; then child+=(--effort "$EFFORT"); fi
@@ -2236,8 +2241,15 @@ launch_in_tmux() {
     size="${CLAUDE_ASK_POPUP_SIZE:-80%}"
     w="${size%%x*}"
     h="${size#*x}"
+    # display-popup -E waits for the run in the popup and returns its exit
+    # status, so a failed answer is not tmux failing: the run deletes this
+    # file as it starts, and then its status is passed on as it is
+    started=$(mktemp "${run_dir_base}/claude-ask-started.XXXXXX")
+    envs+=(-e "_CLAUDE_ASK_STARTED=$started")
     debug_log "tmux popup: $w x $h ${child[*]}"
     tmux display-popup -E -w "$w" -h "$h" -d "$PWD" "${envs[@]}" -- "$self" "${child[@]}" || rc=$?
+    if ((rc != 0)) && [[ ! -e "$started" ]]; then return "$rc"; fi
+    rm -f "$started"
   fi
   if ((rc != 0)); then
     if [[ -n "$qfile" ]]; then rm -f "$qfile"; fi

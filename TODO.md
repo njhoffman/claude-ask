@@ -6,7 +6,11 @@ normal or `(p3)` low, and a category: `[bug]`, `[feature]`, `[refactor]`,
 
 Reviewed: 2026-11-03
 
-## 1. claude-ask
+No open items.
+
+## Completed
+
+### 1. claude-ask (completed 2026-11-03)
 
 - [x] **Make `just lint` pass.** (p2) [chore] shellcheck reports 10 warnings
   (9 SC2034 unused variables such as `BG_CONTEXT` and `cache_read_tokens`, one
@@ -163,11 +167,11 @@ Reviewed: 2026-11-03
   (in a command substitution) for the timestamp, so a few hundred sessions
   take seconds. Compute the age in the first `jq` (`now - (.timestamp |
   fromdateiso8601)`), or read every file in one `jq` call.
-- [ ] **The pager plumbing is still named after `bat`.** (p3) [refactor]
+- [x] **The pager plumbing is still named after `bat`.** (p3) [refactor]
   `BAT_PID`, `BAT_FIFO`, `BAT_OUT_FD` and `drain_bat` (`bin/claude-ask`
   around lines 1385 and 1432-1474) date from when the pager was `bat`; it is
   now any `PAGER_CMD`. Rename them `PAGER_*` and `drain_pager`.
-- [ ] **`--popup` is only tested against the tmux stub.** (p3) [test]
+- [x] **`--popup` is only tested against the tmux stub.** (p3) [test]
   `display-popup` needs an attached client, so the smoke test on a private
   tmux server (`tmux -L`) covered `--split` but not the popup: the paging
   after the answer, `-+F` with a `LESS` that has `-F`, and the popup closing

@@ -68,9 +68,14 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **tmux**: `launch_in_tmux` re-runs the script with `split-window` or
   `display-popup`, passing options and `-e VAR=...` (tmux uses the server's
   environment); the question goes in `_CLAUDE_ASK_QUESTION_TMP` (read and
-  deleted), a popup's paging in `_CLAUDE_ASK_PAGE_AFTER`.
+  deleted), a popup's paging in `_CLAUDE_ASK_PAGE_AFTER`. `display-popup -E`
+  returns the popup run's status; the run deletes `_CLAUDE_ASK_STARTED` as
+  it starts, so a nonzero status with that file gone is passed on, not
+  reported as tmux failing.
   `test/stubs/tmux` logs calls and can run the command
-  (`CLAUDE_STUB_TMUX_RUN`); `common_setup` unsets `TMUX` and points
+  (`CLAUDE_STUB_TMUX_RUN`; display-popup then returns its status);
+  `test/tmux_popup.bats` drives a real tmux (private server, client in a
+  pty with `PTY_SIZE`; skipped without tmux); `common_setup` unsets `TMUX` and points
   `CLAUDE_ASK_CLIPBOARD` at a temp file.
 - **Width**: `render_status_bar_fitted` drops segments to fit `TERM_COLS`
   (`read_term_cols`: `CLAUDE_ASK_COLUMNS`, the tty, `COLUMNS`; re-read on
