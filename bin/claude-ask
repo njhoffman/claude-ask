@@ -1086,7 +1086,8 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
       },
       timestamp: (now | todate)
     } as $turn
-  | (if $p then ($p | turns_of) else [] end) + [$turn] as $turns
+  # Parenthesized: jq 1.7 binds "as" tighter than "+" (1.8 does not)
+  | ((if $p then ($p | turns_of) else [] end) + [$turn]) as $turns
   | {
       session_id: ($init.session_id // $sys.session_id // $p.session_id // null),
       model: ($init.model // $p.model // null),

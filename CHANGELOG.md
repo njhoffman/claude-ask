@@ -6,6 +6,14 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-03
+
+### Fixed
+
+- Saving a session failed with jq 1.7 (Ubuntu 24.04, Debian 13) with
+  "array and object cannot be added": jq 1.7 reads `X + Y as $v` with `as`
+  binding first. Found by the first CI run.
+
 ## [0.6.1] - 2026-11-03
 
 ### Changed
