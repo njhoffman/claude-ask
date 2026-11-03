@@ -30,6 +30,13 @@ in_tmux() {
   run python3 "$PTY" 'expect:READY$ ' "$@" 'send:exit\r' -- \
     tmux -L popup-test -f /dev/null new-session "bash --norc --noprofile"
   screen_text=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b[()][A-Z0-9]//g' | tr -d '\001\002\r')
+  # bats shows what a test prints only when it fails: what the client was
+  # sent, and the pane now if the server is still up (the helper's status is
+  # 124 when an expect step timed out)
+  printf 'pty status: %s\n--- client output (end):\n' "$status"
+  printf '%s\n' "$screen_text" | tr -s ' ' | tail -c 2500
+  printf '\n--- pane:\n'
+  tmux -L popup-test capture-pane -p 2>&1 | grep -v '^$' || true
 }
 
 CA="$BATS_TEST_DIRNAME/../bin/claude-ask"
