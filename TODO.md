@@ -6,7 +6,11 @@ normal or `(p3)` low, and a category: `[bug]`, `[feature]`, `[refactor]`,
 
 Reviewed: 2026-11-03
 
-## 6. Repository
+No open items.
+
+## Completed
+
+### 6. Repository (completed 2026-11-03)
 
 - [x] **Show background agents on the info line.** (p3) [feature] A subagent can
   run in the background: its tool call gets a result at once, so the info line
@@ -57,8 +61,6 @@ Reviewed: 2026-11-03
   `/yank` and `/quit`, and has no word on `/editor`. In `bin/claude-ask`, the
   comment about the question file (line 369) now sits above the
   `_CLAUDE_ASK_STARTED` block instead of the code it describes.
-
-## Completed
 
 ### 5. Options and tmux (completed 2026-11-03)
 
