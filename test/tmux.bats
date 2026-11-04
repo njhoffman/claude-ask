@@ -41,7 +41,7 @@ launch_call() {
   run "$SCRIPT_PATH" --split -e high --theme bubbles "the question"
   [ "$status" -eq 0 ]
   launch_call | grep -q -- "^split-window -h -d -c $PWD "
-  launch_call | grep -q -- " -- .*/bin/claude-ask --theme bubbles --effort high -i$"
+  launch_call | grep -q -- " -- .*/bin/claude-ask' '--theme' 'bubbles' '--effort' 'high' '-i'$"
   [ "$(cat "$CLAUDE_STUB_TMUX_QUESTION")" = "the question" ]
   # Nothing is asked here
   [ ! -s "$CLAUDE_STUB_LOG" ]
@@ -52,7 +52,7 @@ launch_call() {
   [ "$status" -eq 0 ]
   ! launch_call | grep -q -- " -d "
   ! launch_call | grep -q -- "_CLAUDE_ASK_QUESTION_TMP"
-  ! launch_call | grep -q -- " -i$"
+  ! launch_call | grep -q -- " '-i'$"
 }
 
 @test "--split picks the direction from the pane's size" {
@@ -71,7 +71,7 @@ launch_call() {
   # In a private file, not on the command line where ps would show them
   ! launch_call | grep -q "CLAUDE_ASK_EFFORT\|SESSION_DIR\|PATH="
   local envfile
-  envfile=$(launch_call | grep -o '_CLAUDE_ASK_ENV_FILE=[^ ]*' | cut -d= -f2)
+  envfile=$(launch_call | grep -o "_CLAUDE_ASK_ENV_FILE=[^' ]*" | cut -d= -f2)
   [ "$(stat -c %a "$envfile")" = 600 ]
   grep -q '^export CLAUDE_ASK_EFFORT=low$' "$envfile"
   grep -q "^export SESSION_DIR=" "$envfile"
@@ -82,7 +82,7 @@ launch_call() {
   export ANTHROPIC_API_KEY=secret-key HTTPS_PROXY='http://p:1' WITH_NEWLINE=$'a\nb c'
   run "$SCRIPT_PATH" --split "q"
   local envfile
-  envfile=$(launch_call | grep -o '_CLAUDE_ASK_ENV_FILE=[^ ]*' | cut -d= -f2)
+  envfile=$(launch_call | grep -o "_CLAUDE_ASK_ENV_FILE=[^' ]*" | cut -d= -f2)
   ! launch_call | grep -q secret-key
   grep -q '^export ANTHROPIC_API_KEY=secret-key$' "$envfile"
   ! grep -qE '^export (TMUX|TMUX_PANE|TERM|COLUMNS|LINES|PWD|OLDPWD|SHLVL)=' "$envfile"
@@ -117,7 +117,7 @@ launch_call() {
   run "$SCRIPT_PATH" --popup "question"
   [ "$status" -eq 0 ]
   launch_call | grep -q -- "^display-popup -E -w 80% -h 80% -d $PWD "
-  launch_call | grep -q -- "-e _CLAUDE_ASK_PAGE_AFTER=1"
+  launch_call | grep -q -- "_CLAUDE_ASK_PAGE_AFTER=1"
   [[ "$output" == *"PAGED: The capital of France is **Paris**."* ]]
 }
 
@@ -130,7 +130,7 @@ launch_call() {
 
 @test "--popup -i with a question: a chat after the answer, not paged" {
   run "$SCRIPT_PATH" --popup -i "question"
-  launch_call | grep -q -- " -i$"
+  launch_call | grep -q -- " '-i'$"
   ! launch_call | grep -q -- "_CLAUDE_ASK_PAGE_AFTER"
 }
 
@@ -144,10 +144,10 @@ launch_call() {
 
 @test "-y and -Y are passed on to the new claude-ask" {
   run "$SCRIPT_PATH" --split --yank-code=2 "q"
-  launch_call | grep -q -- " --yank-code=2 "
+  launch_call | grep -q -- " '--yank-code=2' "
   : > "$CLAUDE_STUB_TMUX_LOG"
   run "$SCRIPT_PATH" --popup -y "q"
-  launch_call | grep -q -- " --yank"
+  launch_call | grep -q -- " '--yank'"
 }
 
 @test "--popup: the run's own exit status is passed on, not called a tmux failure" {
@@ -174,4 +174,28 @@ launch_call() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"tmux could not start the split"* ]]
   [ -z "$(ls "$XDG_RUNTIME_DIR" | grep claude-ask-question)" ]
+}
+
+@test "shell_command: one command line that bash, zsh and fish read the same" {
+  source_claude_ask
+  local line want
+  shell_command line printf '%s\n' plain "two words" "it's" 'a"b' '$HOME' $'new\nline' '*' '\back'
+  want=$(printf '%s\n' plain "two words" "it's" 'a"b' '$HOME' $'new\nline' '*' '\back')
+  [ "$(bash -c "$line")" = "$want" ]
+  if command -v zsh > /dev/null; then [ "$(zsh -fc "$line")" = "$want" ]; fi
+  if command -v fish > /dev/null; then [ "$(fish --no-config -c "$line")" = "$want" ]; fi
+}
+
+@test "tmux gets one word of command, with no -e" {
+  export CLAUDE_ASK_EFFORT=low
+  run "$SCRIPT_PATH" --popup --pager "sed 's/^/P: /'" "q"
+  ! launch_call | grep -qE ' -e '
+  launch_call | grep -q "^display-popup -E -w 80% -h 80% -d $PWD -- 'env' '_CLAUDE_ASK_ENV_FILE="
+}
+
+@test "a pager with quotes survives the trip" {
+  export CLAUDE_STUB_TMUX_RUN=1 CLAUDE_ASK_POPUP_PAGER=cat
+  run "$SCRIPT_PATH" --popup --pager "sed 's/^/P: /'" "q"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"P: The capital of France"* ]]
 }

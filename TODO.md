@@ -33,7 +33,7 @@ Reviewed: 2026-11-03
 - [x] **No colors but truecolor.** (p3) [feature] Since 0.9.0 `NO_COLOR` is
   honored, but the palette is 24-bit only, which a 256-color terminal shows
   wrongly. Fall back on `COLORTERM`.
-- [ ] **Test older tool versions in CI.** (p3) [chore] jq 1.7 already broke
+- [x] **Test older tool versions in CI.** (p3) [chore] jq 1.7 already broke
   saving (0.6.2). Add `ubuntu-22.04` (jq
   1.6, bash 5.1, an older tmux) to the matrix, or state the minimum versions in
   the README. `launch_in_tmux` assumes `display-popup -e` and does not check.

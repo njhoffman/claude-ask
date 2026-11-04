@@ -1730,6 +1730,16 @@ newest_session_file() {
   printf '%s' "${SESSION_FILES[0]:-}"
 }
 
+# shell_command OUT WORD...: the words as one command line for any shell
+shell_command() {
+  local _out="$1" _word _line=""
+  shift
+  for _word in "$@"; do
+    _line+="${_line:+ }'${_word//\'/\'\\\'\'}'"
+  done
+  printf -v "$_out" '%s' "$_line"
+}
+
 # split_direction WIDTH HEIGHT: "h" (side by side) when the pane is more than
 # twice as wide as it is tall (a cell is about half as wide as it is tall)
 # and each half keeps 80 columns, else "v" (one above the other)
@@ -1901,7 +1911,14 @@ new_session_name() {
 save_session() {
   local raw="$1" question="$2" file="${3:-}" name prev tmp args_json="[]"
   if ((${#CLAUDE_ARGS[@]})); then
-    args_json=$(printf '%s\0' "${CLAUDE_ARGS[@]}" | jq -Rs 'split("\u0000")[:-1]')
+    # A word each with --arg: jq 1.6 cuts raw input at a NUL
+    local word i=0 names="" arg_opts=()
+    for word in "${CLAUDE_ARGS[@]}"; do
+      arg_opts+=(--arg "w$i" "$word")
+      names+="${names:+,}\$w$i"
+      i=$((i + 1))
+    done
+    args_json=$(jq -n -c "${arg_opts[@]}" "[$names]")
   fi
   if [[ -n "$file" && -f "$file" ]]; then
     name=$(basename "$file" .json)
@@ -3051,12 +3068,15 @@ page_answer_in_popup() {
 }
 
 # --split and --popup: start claude-ask again in a new tmux pane or a popup
-# with the same choices, and the question (if any) in a private temp file.
+# with the same choices, and the question (if any) in a private temp file. tmux
+# gets it all as one command, run by the user's shell: display-popup before tmux
+# 3.3 has no -e and takes one word, so the variables go by env, in plain single
+# quotes, which bash, zsh and fish read alike.
 # tmux runs it with the server's environment, so this shell's goes in a private
 # file too, not on tmux's command line where ps shows it: all that is exported,
 # but what belongs to the new pane.
 launch_in_tmux() {
-  local self child=() envs=() var qfile="" envfile w h dir size
+  local self child=() envs=() var qfile="" envfile w h dir size command
   self=$(readlink -f "${BASH_SOURCE[0]}")
   child=(--theme "$THEME")
   if [[ -n "$EFFORT" ]]; then child+=(--effort "$EFFORT"); fi
@@ -3088,11 +3108,11 @@ launch_in_tmux() {
       *) printf 'export %s=%q\n' "$var" "${!var}" ;;
     esac
   done < <(compgen -e) > "$envfile"
-  envs=(-e "_CLAUDE_ASK_ENV_FILE=$envfile")
+  envs=("_CLAUDE_ASK_ENV_FILE=$envfile")
   if [[ -n "$question" ]]; then
     qfile=$(mktemp "${run_dir_base}/claude-ask-question.XXXXXX")
     printf '%s' "$question" > "$qfile"
-    envs+=(-e "_CLAUDE_ASK_QUESTION_TMP=$qfile")
+    envs+=("_CLAUDE_ASK_QUESTION_TMP=$qfile")
   fi
 
   local rc=0
@@ -3110,11 +3130,12 @@ launch_in_tmux() {
       dir=$(split_direction "${w:-80}" "${h:-24}")
     fi
     debug_log "tmux split: -$dir ${detach[*]} ${child[*]}"
-    tmux split-window "-$dir" "${detach[@]}" -c "$PWD" "${envs[@]}" -- "$self" "${child[@]}" || rc=$?
+    shell_command command env "${envs[@]}" "$self" "${child[@]}"
+    tmux split-window "-$dir" "${detach[@]}" -c "$PWD" -- "$command" || rc=$?
   else
     # A question is answered, then paged; quitting the pager closes the popup
     if [[ -n "$question" && "$INTERACTIVE" -eq 1 ]]; then child+=(-i); fi
-    if [[ -n "$question" && "$INTERACTIVE" -eq 0 ]]; then envs+=(-e "_CLAUDE_ASK_PAGE_AFTER=1"); fi
+    if [[ -n "$question" && "$INTERACTIVE" -eq 0 ]]; then envs+=("_CLAUDE_ASK_PAGE_AFTER=1"); fi
     size="${CLAUDE_ASK_POPUP_SIZE:-80%}"
     w="${size%%x*}"
     h="${size#*x}"
@@ -3122,7 +3143,8 @@ launch_in_tmux() {
     # status, so a failed answer is not tmux failing: the run deletes the
     # environment file as it starts, and then its status is passed on as it is
     debug_log "tmux popup: $w x $h ${child[*]}"
-    tmux display-popup -E -w "$w" -h "$h" -d "$PWD" "${envs[@]}" -- "$self" "${child[@]}" || rc=$?
+    shell_command command env "${envs[@]}" "$self" "${child[@]}"
+    tmux display-popup -E -w "$w" -h "$h" -d "$PWD" -- "$command" || rc=$?
     if ((rc != 0)) && [[ ! -e "$envfile" ]]; then return "$rc"; fi
   fi
   if ((rc != 0)); then

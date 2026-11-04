@@ -6,6 +6,18 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-03
+
+### Fixed
+
+- `--popup` works on tmux 3.2, whose `display-popup` has no `-e` and takes one
+  command: tmux now gets one command for both `--popup` and `--split`.
+- `--claude-arg` and `CLAUDE_ASK_ARGS` are saved properly with jq 1.6.
+
+### Changed
+
+- CI also runs the tests on Ubuntu 22.04 (jq 1.6, bash 5.1, tmux 3.2, fish 3.3).
+
 ## [0.15.0] - 2026-11-03
 
 ### Added

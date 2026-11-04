@@ -298,7 +298,7 @@ old_session() {
   export PATH="$STUB_DIR:$PATH" TMUX="/tmp/fake,1,0" CLAUDE_STUB_TMUX_LOG="$TEST_TEMP_DIR/tmux"
   unset CLAUDE_ASK_FORCE_INTERACTIVE
   run "$SCRIPT_PATH" --split --resume=3 "q"
-  grep -q -- " --resume=3 -i$" "$CLAUDE_STUB_TMUX_LOG"
+  grep -q -- " '--resume=3' '-i'$" "$CLAUDE_STUB_TMUX_LOG"
   run "$SCRIPT_PATH" --split -r "q"
-  grep -q -- " -r -i$" "$CLAUDE_STUB_TMUX_LOG"
+  grep -q -- " '-r' '-i'$" "$CLAUDE_STUB_TMUX_LOG"
 }

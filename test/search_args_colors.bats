@@ -215,7 +215,7 @@ three_sessions() {
   export PATH="$STUB_DIR:$PATH" TMUX="/tmp/fake,1,0" CLAUDE_STUB_TMUX_LOG="$TEST_TEMP_DIR/tmux-calls"
   export CLAUDE_ASK_ARGS="--from-env x"
   run "$SCRIPT_PATH" --split --claude-arg --tools --claude-arg Read "q"
-  grep -q -- "--claude-arg --tools --claude-arg Read" "$CLAUDE_STUB_TMUX_LOG"
+  grep -q -- "'--claude-arg' '--tools' '--claude-arg' 'Read'" "$CLAUDE_STUB_TMUX_LOG"
   ! grep -q -- "--from-env" "$CLAUDE_STUB_TMUX_LOG"
 }
 

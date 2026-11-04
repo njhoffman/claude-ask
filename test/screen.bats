@@ -43,7 +43,8 @@ on_screen() {
   done
   [[ -e "$TEST_TEMP_DIR/done" ]]
   sleep 0.2
-  screen_text=$(tmux -L screen-test capture-pane -p -J | grep -v -e '^$' -e '^top$' -e 'chunks' -e 'opus 5.5')
+  # -J keeps trailing spaces, in tmux 3.2 at least
+  screen_text=$(tmux -L screen-test capture-pane -p -J | sed 's/ *$//' | grep -v -e '^$' -e '^top$' -e 'chunks' -e 'opus 5.5')
   printf 'screen:\n%s\n' "$screen_text"
 }
 

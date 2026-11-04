@@ -83,7 +83,8 @@ through a pager with a themed status bar redrawn just below the streamed text
   `LAST_ANSWER` is the result text of the last turn (or the session's last
   answer after `-r`). `YANK_PREVIOUS`: `-y`/`-Y` with no question.
 - **tmux**: `launch_in_tmux` re-runs the script with `split-window` or
-  `display-popup`, passing options. tmux uses the server's environment, so all
+  `display-popup`, passing options, as one command (`shell_command`: tmux 3.2's
+  popup has no `-e` and takes one word, and it runs in the user's shell). tmux uses the server's environment, so all
   that is exported goes in a private file, `_CLAUDE_ASK_ENV_FILE`, which the very
   top of the script sources and deletes; nothing secret goes on tmux's command
   line. The question goes in `_CLAUDE_ASK_QUESTION_TMP` (read and deleted), a
@@ -183,7 +184,8 @@ through a pager with a themed status bar redrawn just below the streamed text
   stubbed, asks real fish with `complete -C`, and checks all three cover every option
   in `--help`, so a new option needs adding to all three.
 - CI: `.github/workflows/ci.yml` runs `just lint` and `just test` on
-  Ubuntu 24.04 (bats, just, zsh, fish and tmux from apt).
+  Ubuntu 24.04 and 22.04, the older tools (jq 1.6, bash 5.1, tmux 3.2, fish 3.3, with
+  a newer bats), so anything used must work there.
 
 ## Versioning
 
