@@ -1,6 +1,7 @@
 #!/bin/bash
 # Stand-in for the claude CLI in tests (CLAUDE_ASK_BIN points here).
 #   CLAUDE_STUB_FIXTURE    stream-json file to print on stdout
+#   CLAUDE_STUB_FIXTURES   files, one for each call (counted in CLAUDE_STUB_LOG)
 #   CLAUDE_STUB_DELAY      seconds to wait before each line (default: none)
 #   CLAUDE_STUB_STDERR     text to print on stderr
 #   CLAUDE_STUB_EXIT       exit status (default 0)
@@ -35,6 +36,10 @@ for arg in "$@"; do
   fi
   prev="$arg"
 done
+if [[ -n "${CLAUDE_STUB_FIXTURES:-}" ]]; then
+  read -r -a fixtures <<< "$CLAUDE_STUB_FIXTURES"
+  CLAUDE_STUB_FIXTURE="${fixtures[call - 1]}"
+fi
 if [[ -n "${CLAUDE_STUB_FIXTURE:-}" ]]; then
   while IFS= read -r line; do
     if [[ -n "${CLAUDE_STUB_DELAY:-}" ]]; then sleep "$CLAUDE_STUB_DELAY"; fi

@@ -192,7 +192,7 @@ debug_log() {
 # CLI argument parsing
 # ---------------------------------------------------------------------------
 # In the script itself, so a copy of it knows; a test keeps it the same as VERSION
-CLAUDE_ASK_VERSION="0.15.3"
+CLAUDE_ASK_VERSION="0.15.4"
 print_version() {
   printf 'claude-ask %s\n' "$CLAUDE_ASK_VERSION"
 }
@@ -1918,28 +1918,60 @@ SESSION_TURNS_JQ='
 # shellcheck disable=SC2016 # jq program
 SESSION_JQ="${SESSION_TURNS_JQ}"'
   def total(f): [.[] | f | numbers] | if length > 0 then add else null end;
+  # What this turn added to a running total. A total that went down is a new one,
+  # so all of it is this turn. Cost is rounded, or subtracting leaves float noise.
+  def since($now; $before):
+    if $now == null then null
+    elif $before == null or $now < $before then $now
+    else $now - $before end;
+  def money: if . == null then null else (. * 100000000 | round) / 100000000 end;
+  # Turns saved before totals were kept hold the running cost and API time as their
+  # own, so they are put right the same way when such a file gets a new turn.
+  def with_totals:
+    reduce .[] as $t ({turns: [], cost: null, api: null};
+      if $t.totals then
+        .turns += [$t] | .cost = $t.totals.cost_usd | .api = $t.totals.duration_api_ms
+      else
+        .turns += [$t + {
+          cost_usd: (since($t.cost_usd; .cost) | money),
+          duration_api_ms: since($t.duration_api_ms; .api),
+          totals: {cost_usd: $t.cost_usd, duration_api_ms: $t.duration_api_ms}}]
+        | .cost = $t.cost_usd | .api = $t.duration_api_ms
+      end)
+    | .turns;
   [inputs | fromjson? | objects] as $events
   | ($events | map(select(.type == "system" and .subtype == "init")) | first) as $init
   | ($events | map(select(.type == "system")) | first) as $sys
   | ($events | map(select(.type == "result"))) as $results
   | ($results | last) as $res
-  # With several results (a background agent) the last can be empty. modelUsage has
-  # the whole run; without it, add them up. Duration is per result, API time and
-  # cost are cumulative.
+  | ($prev | first) as $p
+  | (if $p then ($p | turns_of | with_totals) else [] end) as $earlier
+  | ($earlier | last | .totals // {}) as $before
+  # What claude reports is a running total for the whole conversation, across
+  # resumes: cost, API time and modelUsage. A turn saves its running totals, and
+  # as its own numbers what they grew by. usage and the duration are per result,
+  # and a run can have several (a background agent), the last perhaps empty.
+  # modelUsage has the subagents too, so it is used when it can be compared.
   | ($res.modelUsage // {} | [.[]]) as $models
   | (def sum(f): [$results[] | f | numbers] | if length > 0 then add else null end;
-     if ($models | length) > 0 then
-       {input_tokens: ($models | map(.inputTokens // 0) | add),
-        output_tokens: ($models | map(.outputTokens // 0) | add),
-        cache_creation_input_tokens: ($models | map(.cacheCreationInputTokens // 0) | add),
-        cache_read_input_tokens: ($models | map(.cacheReadInputTokens // 0) | add)}
-     else
-       {input_tokens: sum(.usage.input_tokens),
-        output_tokens: sum(.usage.output_tokens),
-        cache_creation_input_tokens: sum(.usage.cache_creation_input_tokens),
-        cache_read_input_tokens: sum(.usage.cache_read_input_tokens)}
-     end) as $usage
-  | ($prev | first) as $p
+     def model(f): if ($models | length) > 0 then ($models | map(f // 0) | add) else null end;
+     def tokens($name; $now; f):
+       if $now != null and ($earlier == [] or $before[$name] != null)
+       then since($now; $before[$name])
+       else sum(f) end;
+     (model(.inputTokens)) as $in | (model(.outputTokens)) as $out
+     | (model(.cacheCreationInputTokens)) as $cc | (model(.cacheReadInputTokens)) as $cr
+     | {totals: {
+          cost_usd: ($res.total_cost_usd // null),
+          duration_api_ms: ([$results[].duration_api_ms | numbers] | max),
+          input_tokens: $in, output_tokens: $out,
+          cache_creation_input_tokens: $cc, cache_read_input_tokens: $cr},
+        usage: {
+          input_tokens: tokens("input_tokens"; $in; .usage.input_tokens),
+          output_tokens: tokens("output_tokens"; $out; .usage.output_tokens),
+          cache_creation_input_tokens: tokens("cache_creation_input_tokens"; $cc; .usage.cache_creation_input_tokens),
+          cache_read_input_tokens: tokens("cache_read_input_tokens"; $cr; .usage.cache_read_input_tokens)}})
+    as $counts
   # What was shown: every message, as process_stream_line joins them (a
   # blank line where the message id changes). The result event repeats only
   # the last one (or holds the error).
@@ -1963,14 +1995,15 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
       thinking: ([$events[] | select(.type == "assistant") | .message.content[]?
                   | select(.type == "thinking") | .thinking]
                  | if length > 0 then join("\n") else null end),
-      cost_usd: ($res.total_cost_usd // null),
+      cost_usd: (since($counts.totals.cost_usd; $before.cost_usd) | money),
       duration_ms: ([$results[].duration_ms | numbers] | if length > 0 then add else null end),
-      duration_api_ms: ([$results[].duration_api_ms | numbers] | max),
-      usage: $usage,
+      duration_api_ms: since($counts.totals.duration_api_ms; $before.duration_api_ms),
+      usage: $counts.usage,
+      totals: $counts.totals,
       timestamp: (now | todate)
     } as $turn
   # Parenthesized: jq 1.7 binds "as" tighter than "+" (1.8 does not)
-  | ((if $p then ($p | turns_of) else [] end) + [$turn]) as $turns
+  | ($earlier + [$turn]) as $turns
   | {
       session_id: ($init.session_id // $sys.session_id // $p.session_id // null),
       model: ($init.model // $p.model // null),
@@ -1981,7 +2014,7 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
       answer: ($turns | last | .answer),
       is_error: ($turns | last | .is_error),
       thinking: ($turns | last | .thinking),
-      cost_usd: ($turns | total(.cost_usd)),
+      cost_usd: ($turns | total(.cost_usd) | money),
       duration_ms: ($turns | total(.duration_ms)),
       duration_api_ms: ($turns | total(.duration_api_ms)),
       usage: {
@@ -3206,9 +3239,14 @@ ask_once() {
     if [[ -s "$RAW_JSON" ]] && saved_file=$(save_session "$RAW_JSON" "$q" "$CONV_FILE"); then
       CONV_FILE="$saved_file"
       local fields=()
-      mapfile -t fields < <(jq -r '.turn_count, (.cost_usd // "")' "$CONV_FILE")
+      # The stream reports running totals: the bar shows what this turn added
+      mapfile -t fields < <(jq -r '.turn_count, (.cost_usd // ""),
+        (.turns[-1] | (.cost_usd // ""), (.usage.input_tokens // ""), (.usage.output_tokens // ""))' "$CONV_FILE")
       CONV_TURNS="${fields[0]:-1}"
       CONV_COST="${fields[1]:-}"
+      if [[ -n "${fields[2]:-}" ]]; then cost="${fields[2]}"; fi
+      if [[ -n "${fields[3]:-}" ]]; then input_tokens="${fields[3]}"; fi
+      if [[ -n "${fields[4]:-}" ]]; then output_tokens="${fields[4]}"; fi
     fi
   fi
   if ((CONV_TURNS > 1)); then

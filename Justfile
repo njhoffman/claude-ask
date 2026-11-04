@@ -11,7 +11,7 @@ lint:
     bin/claude-ask --completions bash | shellcheck -s bash -
     shellcheck -s bash -x test/stubs/* test/test_helper.bash test/smoke.sh
 
-# try the real claude: three haiku requests, a few cents; not part of test or CI
+# try the real claude: three haiku requests, about a cent; not part of test or CI
 smoke:
     test/smoke.sh
 

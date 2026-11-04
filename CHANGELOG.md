@@ -6,6 +6,15 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-11-03
+
+### Fixed
+
+- A resumed conversation's cost, tokens and API time are no longer overstated. `claude`
+  reports running totals, which were saved as each turn's own and added up (three
+  turns costing $0.0072 showed $0.0204; wrong for cost since 0.4.0, and for tokens
+  since 0.15.3). Each turn now saves what it added, and the bar shows that.
+
 ## [0.15.3] - 2026-11-03
 
 ### Changed

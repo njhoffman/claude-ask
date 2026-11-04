@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A smoke test against the real claude, which the tests replay fixtures in place
-# of: `just smoke`. It makes three haiku requests, a few cents, and leaves
+# of: `just smoke`. It makes three haiku requests, about a cent, and leaves
 # throwaway sessions under ~/.claude/projects. Sessions go to a temp directory.
 set -euo pipefail
 
@@ -30,6 +30,7 @@ ask() {
 
 has() { [[ "$1" == *"$2"* ]]; }
 no_escapes() { [[ "$1" != *$'\e'* ]]; }
+saved_is() { jq -e --argjson result "$result" "$1" "$file" > /dev/null; }
 
 printf 'asking (1 of 3)...\n'
 first=$(ask --save-raw "Reply with exactly this word and nothing else: pineapple" 2> "$work/err1") || {
@@ -53,7 +54,7 @@ if [[ -n "$file" ]]; then
 fi
 
 printf 'resuming (2 of 3)...\n'
-second=$(ask -r "Which word did I ask you to reply with? Reply with only that word." 2> "$work/err2") || {
+second=$(ask --save-raw -r "Which word did I ask you to reply with? Reply with only that word." 2> "$work/err2") || {
   cat "$work/err2" >&2
   check "a resumed answer" false
 }
@@ -63,11 +64,19 @@ if [[ -n "$file" ]]; then
 fi
 
 printf 'through a file, from another directory (3 of 3)...\n'
-(cd "$work" && ask -r "Reply with exactly: done" > "$work/out" 2> "$work/err3") || cat "$work/err3" >&2
+(cd "$work" && ask --save-raw -r "Reply with exactly: done" > "$work/out" 2> "$work/err3") || cat "$work/err3" >&2
 check "the answer went to the file" has "$(tr '[:upper:]' '[:lower:]' < "$work/out")" "done"
 check "the file has no escape codes" no_escapes "$(cat "$work/out")"
 
+# claude reports running totals: what was saved must add up to the last of them
 if [[ -n "$file" ]]; then
+  result=$(jq -c 'select(.type == "result")' "${file%.json}.jsonl" | tail -1)
+  # shellcheck disable=SC2016 # jq programs
+  check "the saved cost is claude's last total" saved_is \
+    '(.cost_usd - $result.total_cost_usd) | fabs < 0.000001'
+  # shellcheck disable=SC2016 # jq programs
+  check "the saved tokens are claude's last total" saved_is \
+    '.usage.output_tokens == ($result.modelUsage | map_values(.outputTokens) | add)'
   printf 'cost: $%s\n' "$(jq -r '.cost_usd // "?"' "$file")"
 fi
 if ((failed)); then

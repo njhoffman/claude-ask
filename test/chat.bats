@@ -37,14 +37,15 @@ SID="full-session-001"
   [ "$(jq -r '.turn_count' "$file")" = "2" ]
   [ "$(jq -r '[.turns[].question] | join(",")' "$file")" = "first question,second question" ]
   [ "$(jq -r '.question' "$file")" = "first question" ]
-  [ "$(jq -r '.cost_usd' "$file")" = "0.02469" ]
+  # The stub reports the same running total each time, so nothing was added
+  [ "$(jq -r '.cost_usd' "$file")" = "0.012345" ]
 }
 
 @test "chat: the info line shows the turn and the conversation total" {
   CHAT_ARGS=()
   chat "one" "two"
   output_clean=$(echo "$output" | strip_ansi)
-  [[ "$output_clean" == *'turn 2 | $0.0247 total'* ]]
+  [[ "$output_clean" == *'turn 2 | $0.0123 total'* ]]
 }
 
 @test "chat: exit and quit end it; blank lines are skipped" {
@@ -163,7 +164,8 @@ old_session() {
   local file="$SESSION_DIR/newest.json"
   [ "$(jq -r '.turn_count' "$file")" = "2" ]
   [ "$(jq -r '[.turns[].question] | join(",")' "$file")" = "question newest,follow up" ]
-  [ "$(jq -r '.cost_usd' "$file")" = "0.022345" ]
+  # The running total claude reported, not added to the one before
+  [ "$(jq -r '.cost_usd' "$file")" = "0.012345" ]
   [ "$(ls "$SESSION_DIR" | wc -l)" -eq 2 ]
 }
 

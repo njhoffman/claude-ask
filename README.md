@@ -213,7 +213,7 @@ script: run `just install` again after an update, or use the lines above.
 ## Development
 
 `just test` runs the bats suite in `test/`; `just lint` runs shellcheck;
-`just smoke` tries the real `claude` with three haiku requests, a few cents.
+`just smoke` tries the real `claude` with three haiku requests, about a cent.
 The tests never call the real `claude`: `test/stubs/claude` replays a
 fixture from `test/fixtures/`.
 `docs/claude-ask.example.json` is a recorded stream-json session for reference.

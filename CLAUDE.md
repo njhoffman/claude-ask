@@ -121,10 +121,13 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Background agents**: `background_tasks_changed` gives `background_tasks`, shown
   on the info line after any running tool; a `result` while it is set does not
   mean done (`result_seen` covers a stream that ends anyway).
-- **Several results**: a run with a background agent has several. Cost and API time
-  are cumulative; durations are per result, so they add; tokens come from the last
-  `modelUsage` (the whole run, with subagents), or add up without one. Both in
-  `process_stream_line` and `SESSION_JQ`.
+- **Running totals**: `total_cost_usd`, `duration_api_ms` and `modelUsage` are running
+  totals for the whole conversation, across results and across resumes; `usage` and
+  `duration_ms` are per result. `SESSION_JQ` saves them in a turn's `totals`, and as
+  its own numbers what they grew by (`since`), so a session's totals are the sum of
+  its turns and match `claude`'s last. `process_stream_line` shows them raw until
+  `ask_once` reads the saved turn back for the final bar. Files without `totals` are
+  put right by `with_totals` when they get a turn. `just smoke` checks this for real.
 - **Subagents**: events carrying `parent_tool_use_id` (field 17) add no answer text,
   here and in `SESSION_JQ`; their tools still show. A background agent means
   several `result`s in a run, with a new `init` before more answer, which sets
