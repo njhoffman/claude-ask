@@ -11,6 +11,8 @@ setup() {
   export CLAUDE_STUB_LOG="$TEST_TEMP_DIR/calls"
   PTY="$BATS_TEST_DIRNAME/helpers/pty_run.py"
   unset XDG_DATA_HOME
+  # less stops to warn when there is no TERM (CI has none)
+  export TERM=xterm-256color
 }
 
 @test "options take =VALUE" {

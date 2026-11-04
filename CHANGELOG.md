@@ -6,6 +6,25 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-03
+
+### Changed
+
+- Answers really stream. `claude` is asked for partial messages, so with
+  `--no-pager`, or stdout going to a file or pipe, text appears word by word.
+- With a pager, each finished block (a paragraph, a list, a whole code block) is
+  rendered as it completes. Before, the default `nvcat` showed nothing until the
+  whole answer had arrived. Text before a tool call shows before the tool runs.
+- The status bar redraws about ten times a second while words arrive, and is only
+  cleared when text reaches it, so it does not flicker.
+
+### Fixed
+
+- A chunk ending exactly at the terminal width no longer loses its last character
+  on screen.
+- The `--session` test that fits the screen sets `TERM`: `less` stops to warn
+  without one, which failed CI for 0.10.0 (the popup tests all pass on tmux 3.4).
+
 ## [0.10.0] - 2026-11-03
 
 ### Changed

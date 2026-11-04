@@ -6,65 +6,6 @@ normal or `(p3)` low, and a category: `[bug]`, `[feature]`, `[refactor]`,
 
 Reviewed: 2026-11-03
 
-## 3. Input and output
-
-- [x] **Piped input with `-i` asks one paid question per line.** (p2) [bug]
-  `printf 'a\nb\nc\n' | claude-ask -i` makes 3 `claude` calls, and
-  `git diff | claude-ask -i "review"` asks `review` and then every line of the
-  diff as its own question. `chat_loop` reads the pipe as typed input (meant
-  for `CLAUDE_ASK_FORCE_INTERACTIVE`, the tests). Read the pipe as the question
-  or its context, then chat on `/dev/tty`; with no terminal, refuse `-i`.
-- [x] **Piped input is dropped when a question is given.** (p2) [bug]
-  `echo DATA | claude-ask "summarize"` sends only `summarize`, with no warning;
-  `git diff | claude-ask "review this"` is the obvious way to use it. Send the
-  question followed by the piped text, keeping `--split` and `--popup` working
-  (the question file already handles the size).
-- [x] **Output to a file or pipe is full of escape codes.** (p2) [bug]
-  `claude-ask q > out` writes cursor moves, colors and every status bar redraw
-  to the file (14 of its lines in a one-line answer, 2249 bytes), since nothing
-  checks `-t 1`. So `claude-ask q | grep x` and `$(claude-ask q)` are unusable.
-  When stdout is not a terminal print only the answer, with the status bar on
-  stderr if that is a terminal. Honor `NO_COLOR` at the same time (no support
-  today), and consider 256-color fallbacks: the palette is truecolor only.
-- [x] **Text after a wrapped line or wide characters lands in the wrong
-  place.** (p2) [bug] `emit_text` counts characters into `CURSOR_COL`, and
-  `update_status_bar` restores that column with `\e[%dG`. On a real screen
-  (`tmux capture-pane`, 60 columns) a 130-character chunk followed by `TAIL`
-  shows `T` at column 60 and `AIL` on the next row, and `日本語日本語` followed
-  by `TAIL` shows `日本語TAIL`: the text is overwritten. Pager output with
-  color codes is counted the same way. Save and restore the cursor (`\e7`,
-  `\e8`, or `\e[s`, `\e[u`) instead of computing a column, watching for
-  scrolling, or count display width modulo `TERM_COLS`.
-- [x] **Messages of one answer run together.** (p2) [bug] With a tool call
-  between two assistant messages, the answer shows
-  `Let me check that.The answer is 42.`: `process_stream_line` appends each
-  message's text with nothing between them, which also breaks Markdown. Add a
-  blank line between messages. The saved `answer`, `/yank` and `--session`
-  keep only the `result` text (the last message), unlike what was shown; decide
-  whether that is what they should hold.
-- [x] **Answers can send escape sequences to the terminal.** (p2) [bug] A text
-  block holding `\u001b]52;c;...` reaches stdout as it is with `--no-pager` or
-  no `nvcat` (checked), so a page a tool fetched could set the clipboard or the
-  window title; `less -R` and session replay need checking too. Strip control
-  characters except newline and tab from the answer, and from questions shown
-  by `--history` and `--session`.
-- [x] **A paste that arrives in pieces becomes several questions.** (p2) [bug]
-  `chat_loop` gathers only lines already waiting (`read -t 0`), so two lines 50ms
-  apart make 2 `claude` calls, which is likely over ssh or a slow tmux
-  `paste-buffer` (one 300-line write is fine). Wait a short time, say 30ms, before
-  deciding nothing more is coming. The reverse also happens: two lines typed
-  ahead while an answer streams are merged into one question.
-- [ ] **Real streaming with `--include-partial-messages`.** (p2) [feature]
-  `claude` emits whole messages unless given that option, which the script does
-  not pass, so a long answer appears all at once when its message is done and
-  the status bar sits still until then. Pass it and parse the `stream_event`
-  text deltas, without printing the final `assistant` message again. Far more
-  chunks would end mid-line, so see the exact-width item below.
-- [x] **Show what `claude` is doing during tool calls.** (p3) [feature]
-  `tool_use` blocks are ignored (`Bash` never appears in the output), so a long
-  tool run looks like a hung spinner. Put the tool's name in the info line, as
-  `thinking...` is now, and show denied tools: in `-p` mode these fail quietly.
-
 ## 4. Sessions and chat history
 
 - [x] **Script source lines end up in the chat history.** (p2) [bug]
@@ -140,7 +81,12 @@ Reviewed: 2026-11-03
 
 ## 6. Repository
 
-- [ ] **A chunk ending exactly at the terminal width loses its last character
+- [ ] **Text from subagents is shown as the answer.** (p3) [bug] Events from a
+  subagent (a `Task` tool call) carry `parent_tool_use_id`, which nothing checks,
+  so if their text is in the stream it would be shown and saved as part of the
+  answer. Not checked against a real subagent run: record one, and skip events
+  with that field if so. They could go on the info line instead.
+- [x] **A chunk ending exactly at the terminal width loses its last character
   on screen.** (p3) [bug] The cursor there is "pending wrap", which moving it
   clears, so the next text overwrites the last cell: 59 `x` and `Z` in 60 columns
   followed by `TAIL` shows `x...xTAIL`. Only the screen is affected, not the saved
@@ -182,6 +128,65 @@ Reviewed: 2026-11-03
   `_CLAUDE_ASK_STARTED` block instead of the code it describes.
 
 ## Completed
+
+### 3. Input and output (completed 2026-11-03)
+
+- [x] **Piped input with `-i` asks one paid question per line.** (p2) [bug]
+  `printf 'a\nb\nc\n' | claude-ask -i` makes 3 `claude` calls, and
+  `git diff | claude-ask -i "review"` asks `review` and then every line of the
+  diff as its own question. `chat_loop` reads the pipe as typed input (meant
+  for `CLAUDE_ASK_FORCE_INTERACTIVE`, the tests). Read the pipe as the question
+  or its context, then chat on `/dev/tty`; with no terminal, refuse `-i`.
+- [x] **Piped input is dropped when a question is given.** (p2) [bug]
+  `echo DATA | claude-ask "summarize"` sends only `summarize`, with no warning;
+  `git diff | claude-ask "review this"` is the obvious way to use it. Send the
+  question followed by the piped text, keeping `--split` and `--popup` working
+  (the question file already handles the size).
+- [x] **Output to a file or pipe is full of escape codes.** (p2) [bug]
+  `claude-ask q > out` writes cursor moves, colors and every status bar redraw
+  to the file (14 of its lines in a one-line answer, 2249 bytes), since nothing
+  checks `-t 1`. So `claude-ask q | grep x` and `$(claude-ask q)` are unusable.
+  When stdout is not a terminal print only the answer, with the status bar on
+  stderr if that is a terminal. Honor `NO_COLOR` at the same time (no support
+  today), and consider 256-color fallbacks: the palette is truecolor only.
+- [x] **Text after a wrapped line or wide characters lands in the wrong
+  place.** (p2) [bug] `emit_text` counts characters into `CURSOR_COL`, and
+  `update_status_bar` restores that column with `\e[%dG`. On a real screen
+  (`tmux capture-pane`, 60 columns) a 130-character chunk followed by `TAIL`
+  shows `T` at column 60 and `AIL` on the next row, and `日本語日本語` followed
+  by `TAIL` shows `日本語TAIL`: the text is overwritten. Pager output with
+  color codes is counted the same way. Save and restore the cursor (`\e7`,
+  `\e8`, or `\e[s`, `\e[u`) instead of computing a column, watching for
+  scrolling, or count display width modulo `TERM_COLS`.
+- [x] **Messages of one answer run together.** (p2) [bug] With a tool call
+  between two assistant messages, the answer shows
+  `Let me check that.The answer is 42.`: `process_stream_line` appends each
+  message's text with nothing between them, which also breaks Markdown. Add a
+  blank line between messages. The saved `answer`, `/yank` and `--session`
+  keep only the `result` text (the last message), unlike what was shown; decide
+  whether that is what they should hold.
+- [x] **Answers can send escape sequences to the terminal.** (p2) [bug] A text
+  block holding `\u001b]52;c;...` reaches stdout as it is with `--no-pager` or
+  no `nvcat` (checked), so a page a tool fetched could set the clipboard or the
+  window title; `less -R` and session replay need checking too. Strip control
+  characters except newline and tab from the answer, and from questions shown
+  by `--history` and `--session`.
+- [x] **A paste that arrives in pieces becomes several questions.** (p2) [bug]
+  `chat_loop` gathers only lines already waiting (`read -t 0`), so two lines 50ms
+  apart make 2 `claude` calls, which is likely over ssh or a slow tmux
+  `paste-buffer` (one 300-line write is fine). Wait a short time, say 30ms, before
+  deciding nothing more is coming. The reverse also happens: two lines typed
+  ahead while an answer streams are merged into one question.
+- [x] **Real streaming with `--include-partial-messages`.** (p2) [feature]
+  `claude` emits whole messages unless given that option, which the script does
+  not pass, so a long answer appears all at once when its message is done and
+  the status bar sits still until then. Pass it and parse the `stream_event`
+  text deltas, without printing the final `assistant` message again. Far more
+  chunks would end mid-line, so see the exact-width item below.
+- [x] **Show what `claude` is doing during tool calls.** (p3) [feature]
+  `tool_use` blocks are ignored (`Bash` never appears in the output), so a long
+  tool run looks like a hung spinner. Put the tool's name in the info line, as
+  `thinking...` is now, and show denied tools: in `-p` mode these fail quietly.
 
 ### 2. CI (completed 2026-11-03)
 

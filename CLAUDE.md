@@ -20,7 +20,11 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Pager**: default `nvcat --pager less` (`CLAUDE_ASK_PAGER` overrides; a
   default that is not installed means plain text); `--pager CMD` (run with
   `bash -c`) or `--no-pager`. `run_pager` passes `COLUMNS`, since a pager
-  writing to the streaming pipe cannot ask the terminal for its width.
+  writing to a pipe cannot ask the terminal for its width. A renderer may print
+  nothing until its input ends (nvcat does, and takes 200-300ms a run), so
+  while streaming `write_chunk` splits the text into blocks (a blank line, or
+  a whole code block) and `render_block` runs the pager on each;
+  `render_flush` at `content_block_stop` and at the end shows the rest.
   Tests set `CLAUDE_ASK_PAGER=cat`.
 - **Terminal or not**: `OUT_TTY` is whether stdout is a terminal
   (`CLAUDE_ASK_FORCE_TTY` for tests; `common_setup` sets it and `exec < /dev/null`).
@@ -94,7 +98,7 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Redraw**: `update_status_bar` never computes a column: it makes rows with
   `\eD` (keeps the column, unlike `\n`), moves back up by `text_rows`, and draws
   between `\e7` and `\e8`. `emit_text` clears the old bar before text goes over
-  it. `test/screen.bats` reads real screens from a tmux pane; it starts below
+  it when text reaches them. `test/screen.bats` reads real screens from a tmux pane; it starts below
   the top-left, where tmux's `scroll-on-clear` turns `\e[J` into history.
 - **Session files**: one per conversation; `turns` plus top-level first
   question, last answer and totals (`SESSION_JQ`). Files from before turns are
@@ -105,12 +109,20 @@ through a pager with a themed status bar redrawn just below the streamed text
   the result.
 - **Answers**: events of one message share `.message.id`; a blank line goes
   where it changes, in `process_stream_line` and `SESSION_JQ` alike.
+- **Partial messages**: `claude` gets `--include-partial-messages`, so text comes
+  as `stream_event` deltas and each finished block comes again, whole, in an
+  `assistant` event, which `stream_text_unconfirmed` skips (a stream with no
+  deltas still works). `test/fixtures/partial_messages.jsonl` is a real recording,
+  scrubbed: its `partial_json` deltas split a path across events, so check
+  fixtures on their joined strings. `show_stream_event` redraws about ten times a
+  second for deltas, and never with the cursor just past the last column
+  (`LINE_COLS`), since moving it from there loses the next character's place.
 - **Stream parsing**: `process_stream_line` updates the state variables and
   is the only parser: the main loop, `--demo-output` and the tests all call
   it. It gets an event's fields from one long-lived `jq` coprocess
   (`stream_fields`, `STREAM_COPROC_JQ`): one NUL-separated record of
   `STREAM_FIELD_COUNT` fields per input line, an empty one for bad input.
-  The coprocess closes inherited fds (the pager FIFO is fd 3) and ignores
+  The coprocess closes inherited fds and ignores
   SIGINT; it is restarted if it dies. `save_session` writes session files.
 - **Chat history**: read `-e` stops at a newline, so a multi-line question is held
   on one line with `CHAT_NEWLINE_MARK` (`⏎`), turned back on submit.
@@ -119,8 +131,7 @@ through a pager with a themed status bar redrawn just below the streamed text
   (`HISTORY_JQ`), falling back to one per file when one is not JSON;
   `format_age` formats the age.
 - **Runtime files**: one private `mktemp -d` per run (under
-  `$XDG_RUNTIME_DIR`) holds the pager FIFO, the raw stream and `claude`'s
-  stderr; `cleanup` removes it.
+  `$XDG_RUNTIME_DIR`) holds the raw stream and `claude`'s stderr; `cleanup` removes it.
 - **Traps**: write `return 0`, never a bare `return`, in anything
   `cleanup` or the traps call: in a trap a bare `return` gives the status
   from before the trap, and under `set -e` that aborts the handler.

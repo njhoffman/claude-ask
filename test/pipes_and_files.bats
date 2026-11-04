@@ -232,3 +232,78 @@ STUB
   CLAUDE_ASK_BIN="$TEST_TEMP_DIR/umask-claude" run "$SCRIPT_PATH" --no-pager "q"
   [ "$(cat "$TEST_TEMP_DIR/seen-umask")" = "0022" ]
 }
+
+@test "claude is asked for partial messages" {
+  run "$SCRIPT_PATH" --no-pager "q"
+  grep -q -- '--include-partial-messages' "$CLAUDE_STUB_LOG"
+}
+
+@test "partial messages: the answer shows once, and is saved once" {
+  export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/partial_messages.jsonl"
+  local result want="I'll read \`a.txt\` from the working directory and show its contents."
+  result=$(jq -r 'select(.type == "result") | .result' "$CLAUDE_STUB_FIXTURE")
+  [ "$(plain "q" 2> /dev/null)" = "$want"$'\n\n'"$result" ]
+  [ "$(jq -r .answer "$SESSION_DIR/q.json")" = "$want"$'\n\n'"$result" ]
+  [ "$(jq -r .session_id "$SESSION_DIR/q.json")" = "partial-001" ]
+}
+
+# A pager that logs each run: its input between markers
+counting_pager() {
+  cat > "$TEST_TEMP_DIR/pager" <<STUB
+#!/bin/bash
+input=\$(cat)
+printf '[%s]\n' "\$input" >> "$TEST_TEMP_DIR/pager-runs"
+printf 'R:%s\n' "\$input"
+STUB
+  chmod +x "$TEST_TEMP_DIR/pager"
+}
+
+@test "with a pager each block is rendered on its own, a code block whole" {
+  counting_pager
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  jq -cn '{type: "system", subtype: "init", session_id: "s", model: "claude-opus-5-5"},
+    ({type: "stream_event", event: {type: "message_start", message: {id: "m1"}}}),
+    ("First para", "graph.\n", "\nSecond one.\n\n```sh\necho a\n", "\necho b\n```", "\n\nLast bit") as $t
+      | {type: "stream_event", event: {type: "content_block_delta", delta: {type: "text_delta", text: $t}}}' > "$CLAUDE_STUB_FIXTURE"
+  printf '%s\n' '{"type":"result","is_error":false,"result":"x","session_id":"s","total_cost_usd":0.1,"duration_ms":1,"usage":{"input_tokens":1,"output_tokens":1}}' >> "$CLAUDE_STUB_FIXTURE"
+  run "$SCRIPT_PATH" --pager "$TEST_TEMP_DIR/pager" "q"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_TEMP_DIR/pager-runs")" = $'[First paragraph.]\n[Second one.]\n[```sh\necho a\n\necho b\n```]\n[Last bit]' ]
+  # Blocks with a blank line between them, and nothing else on stdout
+  : > "$TEST_TEMP_DIR/pager-runs"
+  [ "$(plain --pager "$TEST_TEMP_DIR/pager" "again" 2> /dev/null)" = $'R:First paragraph.\n\nR:Second one.\n\nR:```sh\necho a\n\necho b\n```\n\nR:Last bit' ]
+}
+
+@test "with a pager text shows before a tool runs, with no blank line after it" {
+  counting_pager
+  export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/partial_messages.jsonl"
+  run "$SCRIPT_PATH" --pager "$TEST_TEMP_DIR/pager" "q"
+  [ "$status" -eq 0 ]
+  [ "$(head -1 "$TEST_TEMP_DIR/pager-runs")" = "[I'll read \`a.txt\` from the working directory and show its contents.]" ]
+  # The text after the tool is whole blocks, none repeated
+  [ "$(grep -c "I'll read" "$TEST_TEMP_DIR/pager-runs")" -eq 1 ]
+  [ "$(grep -c '^\[The file' "$TEST_TEMP_DIR/pager-runs")" -eq 1 ]
+}
+
+@test "a pager that gives nothing back: the text itself is shown" {
+  run "$SCRIPT_PATH" --pager "cat > /dev/null" "q"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Paris"* ]]
+  run "$SCRIPT_PATH" --pager "exit 3" "other q"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Paris"* ]]
+}
+
+@test "many deltas do not redraw the bar for each one" {
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  {
+    printf '%s\n' '{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-5-5"}'
+    jq -cn 'range(400) | {type: "stream_event", event: {type: "content_block_delta", delta: {type: "text_delta", text: "w "}}}'
+    printf '%s\n' '{"type":"result","is_error":false,"result":"x","session_id":"s","total_cost_usd":0.1,"duration_ms":1,"usage":{"input_tokens":1,"output_tokens":1}}'
+  } > "$CLAUDE_STUB_FIXTURE"
+  run "$SCRIPT_PATH" --no-pager "q"
+  [ "$status" -eq 0 ]
+  # Every word arrives; well under one bar each
+  [ "$(printf '%s' "$output" | strip_ansi | grep -o 'w ' | wc -l)" -ge 400 ]
+  [ "$(grep -c 'chunks' <<< "$output")" -lt 200 ]
+}

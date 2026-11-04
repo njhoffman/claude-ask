@@ -870,6 +870,15 @@ reset_stream_state() {
   duration_ms=""
   answer_text=""
   answer_message_id="" # the message answer_text last grew from
+  stream_message_id="" # the message stream_event deltas belong to
+  stream_text_unconfirmed=0 # deltas seen; their assistant event is a repeat
+  REDRAW_MAY_WAIT=0
+  BLOCK_ENDED=0
+  LINE_COLS=0 # columns of answer text on the cursor's line, roughly
+  RENDER_PENDING="" # with a pager: text not yet a whole line
+  RENDER_BLOCK=""   # lines of the block being gathered
+  RENDER_FENCE=""   # the fence of the code block it is in
+  RENDER_SHOWN=0    # a block has been shown
   result_text="" # the result event's text: the last message, or the error
   status="running" # running, done or error
   stream_error=""
@@ -895,7 +904,9 @@ CONTROL_CHARS_RE='[\u0000-\u0008\u000b-\u001f\u007f-\u009f]'
 # output tokens, cost, duration_ms, is_error, result text, error (an
 # assistant event's error code), message id (one message can span events),
 # the tool the event starts ("Bash: git status"), the tools a result says were
-# denied.
+# denied; for a stream_event (--include-partial-messages) what it is
+# ("content_block_delta:text_delta") and its value (the text, a tool's name or
+# a message's id).
 # shellcheck disable=SC2016 # $u is a jq variable
 STREAM_FIELDS_JQ='
   (if .type == "result" then .usage else .message.usage end) as $u
@@ -913,9 +924,15 @@ STREAM_FIELDS_JQ='
            | (.command // .file_path // .path // .pattern // .url // .query // .description // "")
            | tostring | (split("\n")[0] // "") | if . == "" then "" else ": " + . end)
          end),
-      ([.permission_denials[]?.tool_name] | unique | join(", ")) ]
+      ([.permission_denials[]?.tool_name] | unique | join(", ")),
+      (if .type == "stream_event"
+       then (.event.type // "") + ":" + (.event.delta.type // .event.content_block.type // "")
+       else null end),
+      (if .type == "stream_event"
+       then (.event.delta.text // .event.content_block.name // .event.message.id)
+       else null end) ]
   | map((. // "" | tostring | gsub("'"$CONTROL_CHARS_RE"'"; "")) + "\u0000") | add'
-STREAM_FIELD_COUNT=15
+STREAM_FIELD_COUNT=17
 
 # The parser is one jq that lives for the whole run, a coprocess fed one
 # line at a time, instead of a jq started for every event. It reads raw
@@ -932,9 +949,8 @@ STREAM_COPROC_JQ='
 STREAM_JQ_PID=""
 
 # Start the parser's jq. It closes every file descriptor it inherited past
-# stderr first: holding the pager FIFO's write end (fd 3) or claude's output
-# would keep them open after claude-ask closes them, and the pager would
-# never see its input end. SIGINT is ignored in it, so a Ctrl-C that stops
+# stderr first, so it never holds claude's output or a pipe of the caller's
+# open after claude-ask closes it. SIGINT is ignored in it, so a Ctrl-C that stops
 # an answer in a chat does not stop the parser too.
 start_stream_jq() {
   # shellcheck disable=SC2034 # STREAM_JQ is the coprocess's fd array
@@ -977,12 +993,38 @@ stream_fields() {
   done
 }
 
+# add_answer_text TEXT MESSAGE_ID: add to the answer; CHUNK is what to show, with
+# a blank line first when this is a new message (a tool call came between). The
+# events of one message share its id.
+add_answer_text() {
+  CHUNK="$1"
+  is_thinking=0
+  current_tool=""
+  if [[ -n "$answer_text" && -n "$2" && "$2" != "$answer_message_id" ]]; then
+    CHUNK=$'\n\n'"$CHUNK"
+  fi
+  if [[ -n "$2" ]]; then answer_message_id="$2"; fi
+  answer_text+="$CHUNK"
+  text_chunks=$((text_chunks + 1))
+  answer_chars=$((answer_chars + ${#CHUNK}))
+  local newlines="${CHUNK//[!$'\n']/}"
+  answer_lines=$((answer_lines + ${#newlines}))
+}
+
 # Parse one stream-json line into the state variables. CHUNK is set to the
-# answer text the line added (empty if none). Returns 1 for lines that change
-# nothing on screen: blank, not JSON, no type, or a rate_limit_event.
+# answer text the line added (empty if none); REDRAW_MAY_WAIT says this event
+# need not redraw the bar at once, and BLOCK_ENDED that a block of text ended.
+# Returns 1 for lines that change nothing on screen: blank, not JSON, no type,
+# or a rate_limit_event.
+#
+# With --include-partial-messages text comes as stream_event deltas, and each
+# finished block comes again, whole, in an assistant event: that repeat is
+# skipped (stream_text_unconfirmed). A stream with no deltas still works.
 process_stream_line() {
   local line="$1" f=()
   CHUNK=""
+  REDRAW_MAY_WAIT=0
+  BLOCK_ENDED=0
   [[ -n "$line" ]] || return 1
   stream_fields "$line" || return 1
   f=("${STREAM_F[@]}")
@@ -1000,20 +1042,11 @@ process_stream_line() {
         api_error="${f[11]}"
         stream_error="${f[3]:-$api_error}"
       elif [[ -n "${f[3]}" ]]; then
-        is_thinking=0
-        CHUNK="${f[3]}"
-        # A new message of the same answer (a tool call came between); the
-        # events of one message share its id
-        if [[ -n "$answer_text" && -n "${f[12]}" && "${f[12]}" != "$answer_message_id" ]]; then
-          CHUNK=$'\n\n'"$CHUNK"
+        if ((stream_text_unconfirmed)); then
+          stream_text_unconfirmed=0
+        else
+          add_answer_text "${f[3]}" "${f[12]}"
         fi
-        if [[ -n "${f[12]}" ]]; then answer_message_id="${f[12]}"; fi
-        answer_text+="$CHUNK"
-        current_tool=""
-        text_chunks=$((text_chunks + 1))
-        answer_chars=$((answer_chars + ${#CHUNK}))
-        local newlines="${CHUNK//[!$'\n']/}"
-        answer_lines=$((answer_lines + ${#newlines}))
       elif [[ "${f[4]}" == 1 ]]; then
         is_thinking=1
       fi
@@ -1021,6 +1054,22 @@ process_stream_line() {
         is_thinking=0
         current_tool="${f[13]}"
       fi
+      ;;
+    stream_event)
+      REDRAW_MAY_WAIT=1
+      case "${f[15]}" in
+        message_start:*) stream_message_id="${f[16]}" ;;
+        content_block_start:thinking) is_thinking=1 ;;
+        content_block_start:tool_use)
+          is_thinking=0
+          current_tool="${f[16]}"
+          ;;
+        content_block_delta:text_delta)
+          add_answer_text "${f[16]}" "$stream_message_id"
+          stream_text_unconfirmed=1
+          ;;
+        content_block_stop:* | message_stop:*) BLOCK_ENDED=1 ;;
+      esac
       ;;
     user)
       # A tool's result: it has finished
@@ -1070,13 +1119,15 @@ run_pager() {
 # ---------------------------------------------------------------------------
 # Yanking: copy an answer, or its code blocks, to the clipboard
 # ---------------------------------------------------------------------------
+FENCE_OPEN_RE='^ {0,3}(```+|~~~+)'
+FENCE_CLOSE_RE='^ {0,3}(```+|~~~+)[[:space:]]*$'
+
 # Set CODE_BLOCKS to TEXT's fenced code blocks (``` or ~~~, indented up to
 # three spaces), without the fence lines. A block closes at a fence of the
 # same character at least as long; one still open at the end runs to it.
 extract_code_blocks() {
   local line fence="" block="" open=0
-  local re_open='^ {0,3}(```+|~~~+)'
-  local re_close='^ {0,3}(```+|~~~+)[[:space:]]*$'
+  local re_open="$FENCE_OPEN_RE" re_close="$FENCE_CLOSE_RE"
   CODE_BLOCKS=()
   while IFS= read -r line || [[ -n "$line" ]]; do
     if ((open)); then
@@ -1668,21 +1719,14 @@ run_demo_output() {
       STATUS_BAR_VISIBLE=0
       STREAM_START=$SECONDS
 
-      if [[ "$USE_PAGER" -eq 1 && "$STREAM_OUTPUT" -eq 1 ]]; then
-        start_pager_pipe
-      fi
-
       update_status_bar "${SPINNER[0]}" "connecting..." "" "" "" "" "running"
 
       while IFS= read -r line; do
         process_stream_line "$line" || continue
-        if [[ -n "$CHUNK" && "$STREAM_OUTPUT" -eq 1 ]]; then
-          write_chunk "$CHUNK"
-        fi
-        refresh_status_bar
+        show_stream_event
       done < <(generate_mock_stream "$size" "${CLAUDE_ASK_DEMO_DELAY:-0.03}")
 
-      stop_pager_pipe
+      if [[ "$STREAM_OUTPUT" -eq 1 ]]; then render_flush; fi
       print_batch_answer
       show_final_status_bar
 
@@ -2030,11 +2074,21 @@ fi
 STATUS_BAR_VISIBLE=0
 STREAM_START=0
 
-# Text goes over the bar's rows, so they are cleared first (it is redrawn
-# below the text after), or the end of a long bar line would stay beside it
+# Show answer text. The bar's old rows are cleared first if this reaches them
+# (a word on the same line does not; clearing for every word would flicker).
+# LINE_COLS follows the cursor's column closely enough for refresh_stream_bar.
 emit_text() {
   [[ -n "$1" ]] || return 0
-  if ((STATUS_BAR_VISIBLE)); then
+  local after reaches=0
+  if [[ "$1" == *$'\n'* ]]; then
+    after="${1##*$'\n'}"
+    LINE_COLS=${#after}
+    reaches=1
+  else
+    LINE_COLS=$((LINE_COLS + ${#1}))
+    if ((TERM_COLS == 0 || ${#1} >= TERM_COLS)); then reaches=1; fi
+  fi
+  if ((reaches && STATUS_BAR_VISIBLE && OUT_TTY)); then
     printf '\e[J' >&"$BAR_FD"
     STATUS_BAR_VISIBLE=0
   fi
@@ -2084,9 +2138,6 @@ refresh_status_bar() {
   if [[ "$status" == "done" ]]; then spin_char="✓"; fi
   if [[ "$status" == "error" ]]; then spin_char="✗"; fi
 
-  # Drain any rendered output from the pager before updating the status bar
-  drain_pager
-
   local disp_in disp_out disp_cost disp_dur label
   format_tokens disp_in "$input_tokens"
   format_tokens disp_out "$output_tokens"
@@ -2094,6 +2145,24 @@ refresh_status_bar() {
   format_duration disp_dur "$duration_ms"
   model_label label "${model:-...}" "$EFFORT"
   update_status_bar "$spin_char" "$label" "$disp_in" "$disp_out" "$disp_cost" "$disp_dur" "$status"
+}
+
+# After an event: show its text, and redraw the bar unless that can wait. Words
+# arrive far faster than a bar can usefully change, so those redraw about ten
+# times a second. Neither redraw with the cursor just past the last column:
+# moving it from there loses that state, and the next text would overwrite the
+# last character. The next event redraws instead.
+LAST_BAR_REDRAW=0
+show_stream_event() {
+  if [[ -n "$CHUNK" && "$STREAM_OUTPUT" -eq 1 ]]; then write_chunk "$CHUNK"; fi
+  if ((BLOCK_ENDED)); then render_flush; fi
+  local now="${EPOCHREALTIME/[.,]/}"
+  if ((REDRAW_MAY_WAIT && now - LAST_BAR_REDRAW < 100000)) && [[ "$CHUNK" != *$'\n'* ]]; then
+    return 0
+  fi
+  if ((TERM_COLS > 0 && LINE_COLS > 0 && LINE_COLS % TERM_COLS == 0)); then return 0; fi
+  LAST_BAR_REDRAW="$now"
+  refresh_status_bar
 }
 
 # The status bar left below the answer once the stream has ended
@@ -2132,9 +2201,6 @@ if [[ ! -d "$run_dir_base" || ! -w "$run_dir_base" ]]; then
 fi
 RUN_DIR=$(mktemp -d "${run_dir_base}/claude-ask.XXXXXX")
 
-PAGER_PID=""
-PAGER_FIFO=""
-PAGER_OUT_FD=""
 CLAUDE_PID=""
 
 # shellcheck disable=SC2317 # called by trap
@@ -2145,10 +2211,8 @@ cleanup() {
     printf '\e[J' >&"$BAR_FD"
   fi
   printf '\e[?25h' >&"$BAR_FD" # ensure cursor visible
-  if [[ -n "$PAGER_PID" ]]; then kill "$PAGER_PID" 2> /dev/null || true; fi
   if [[ -n "$CLAUDE_PID" ]]; then kill "$CLAUDE_PID" 2> /dev/null || true; fi
   stop_stream_jq
-  if [[ -n "$PAGER_OUT_FD" ]]; then exec {PAGER_OUT_FD}<&- 2> /dev/null || true; fi
   # The intr key, if the chat prompt had it undefined
   if [[ -n "${CHAT_STTY:-}" ]]; then stty "$CHAT_STTY" 2> /dev/null || true; fi
   rm -rf "$RUN_DIR" 2> /dev/null || true
@@ -2174,68 +2238,59 @@ trap 'exit 131' QUIT
 trap read_term_cols WINCH
 
 # ---------------------------------------------------------------------------
-# Streaming pager: the pager reads chunks from a FIFO and its rendered output
-# is read back here, so it can be drained in step with status bar updates
+# Showing text as it arrives. With no pager, as it comes. A Markdown pager may
+# print nothing until its input ends (nvcat does), so with one each finished
+# block (up to a blank line, or a whole code block) goes through it on its own.
 # ---------------------------------------------------------------------------
-start_pager_pipe() {
-  PAGER_FIFO="$RUN_DIR/pager.fifo"
-  mkfifo "$PAGER_FIFO"
-  exec {PAGER_OUT_FD}< <(run_pager < "$PAGER_FIFO" 2> /dev/null)
-  PAGER_PID=$!
-  exec 3> "$PAGER_FIFO"
-  debug_log "pager pipeline: fifo=$PAGER_FIFO pid=$PAGER_PID out_fd=$PAGER_OUT_FD"
-}
-
-# Close the pager's input and print the rest of its output
-stop_pager_pipe() {
-  [[ -n "$PAGER_OUT_FD" ]] || return 0
-  exec 3>&-
-  drain_pager_final
-  exec {PAGER_OUT_FD}<&-
-  PAGER_OUT_FD=""
-  wait "$PAGER_PID" 2> /dev/null || true
-  PAGER_PID=""
-  rm -f "$PAGER_FIFO"
-  PAGER_FIFO=""
-}
-
-# Write a text chunk: through the pager if running, otherwise to the terminal
 write_chunk() {
-  local chunk="$1"
-  if [[ -n "$PAGER_OUT_FD" ]]; then
-    printf '%s' "$chunk" >&3
-  else
-    emit_text "$chunk"
+  if [[ "$USE_PAGER" -ne 1 ]]; then
+    emit_text "$1"
+    return 0
   fi
-}
-
-# Drain available pager output into the terminal without blocking. Each read
-# waits at most 10ms; on a timeout read keeps the text it got, so a line the
-# pager has only partly written is printed as far as it goes instead of
-# stalling the status bar until the pager finishes it.
-drain_pager() {
-  [[ -z "$PAGER_OUT_FD" ]] && return 0
-  local pager_line
-  while true; do
-    pager_line=""
-    if IFS= read -r -t 0.01 pager_line <&"${PAGER_OUT_FD}"; then
-      emit_text "${pager_line}"$'\n'
+  local line
+  RENDER_PENDING+="$1"
+  while [[ "$RENDER_PENDING" == *$'\n'* ]]; do
+    line="${RENDER_PENDING%%$'\n'*}"
+    RENDER_PENDING="${RENDER_PENDING#*$'\n'}"
+    if [[ -n "$RENDER_FENCE" ]]; then
+      RENDER_BLOCK+="$line"$'\n'
+      if [[ "$line" =~ $FENCE_CLOSE_RE && "${BASH_REMATCH[1]:0:1}" == "${RENDER_FENCE:0:1}" && ${#BASH_REMATCH[1]} -ge ${#RENDER_FENCE} ]]; then
+        RENDER_FENCE=""
+      fi
+    elif [[ "$line" =~ $FENCE_OPEN_RE ]]; then
+      RENDER_FENCE="${BASH_REMATCH[1]}"
+      RENDER_BLOCK+="$line"$'\n'
+    elif [[ "$line" =~ ^[[:space:]]*$ ]]; then
+      render_block
     else
-      # Timeout or EOF: print any partial line and stop
-      emit_text "$pager_line"
-      break
+      RENDER_BLOCK+="$line"$'\n'
     fi
   done
 }
 
-# Drain all remaining pager output (blocking until EOF)
-drain_pager_final() {
-  [[ -z "$PAGER_OUT_FD" ]] && return 0
-  local pager_line
-  # The || keeps a last line that has no trailing newline
-  while IFS= read -r pager_line <&"${PAGER_OUT_FD}" || [[ -n "$pager_line" ]]; do
-    emit_text "${pager_line}"$'\n'
-  done
+# Run the gathered block through the pager and show it, a blank line after the
+# last one. If the pager gives nothing back, the text itself is shown.
+render_block() {
+  local block="$RENDER_BLOCK" out=""
+  RENDER_BLOCK=""
+  [[ "$block" =~ [^[:space:]] ]] || return 0
+  out=$(printf '%s' "$block" | run_pager 2> /dev/null) || true
+  if [[ -z "$out" ]]; then out="${block%$'\n'}"; fi
+  if ((RENDER_SHOWN)); then out=$'\n\n'"$out"; fi
+  RENDER_SHOWN=1
+  emit_text "$out"
+}
+
+# A block of text ended, or the answer did: show what is gathered, even without
+# a blank line or a closing fence, so "Let me check." shows before a tool runs
+render_flush() {
+  [[ "$USE_PAGER" -eq 1 ]] || return 0
+  if [[ -n "$RENDER_PENDING" ]]; then
+    RENDER_BLOCK+="$RENDER_PENDING"$'\n'
+    RENDER_PENDING=""
+  fi
+  RENDER_FENCE=""
+  render_block
 }
 
 # ---------------------------------------------------------------------------
@@ -2273,7 +2328,7 @@ LAST_MODEL_FOR=""
 # when the answer was interrupted (chat mode only).
 ask_once() {
   local q="$1" line claude_status=0 saved_file total
-  local claude_args=(--output-format stream-json --verbose -p)
+  local claude_args=(--output-format stream-json --verbose --include-partial-messages -p)
   if [[ -n "$CONV_SESSION_ID" ]]; then
     claude_args+=(--resume "$CONV_SESSION_ID")
   fi
@@ -2289,9 +2344,6 @@ ask_once() {
   CONV_INFO=""
   if ((CONV_TURNS > 0)); then CONV_INFO="turn $((CONV_TURNS + 1))"; fi
 
-  if [[ "$USE_PAGER" -eq 1 && "$STREAM_OUTPUT" -eq 1 ]]; then
-    start_pager_pipe
-  fi
   update_status_bar "${SPINNER[0]}" "connecting..." "" "" "" "" "running"
 
   # claude runs on its own fd so its exit status can be collected afterwards.
@@ -2305,10 +2357,7 @@ ask_once() {
   while ((!TURN_INTERRUPTED)) && IFS= read -r line <&"$CLAUDE_FD"; do
     printf '%s\n' "$line" >> "$RAW_JSON"
     process_stream_line "$line" || continue
-    if [[ -n "$CHUNK" && "$STREAM_OUTPUT" -eq 1 ]]; then
-      write_chunk "$CHUNK"
-    fi
-    refresh_status_bar
+    show_stream_event
   done
 
   exec {CLAUDE_FD}<&-
@@ -2317,7 +2366,7 @@ ask_once() {
   CLAUDE_PID=""
   debug_log "claude exited: status=$claude_status stream_status=$status interrupted=$TURN_INTERRUPTED"
 
-  stop_pager_pipe
+  if [[ "$STREAM_OUTPUT" -eq 1 ]]; then render_flush; fi
 
   # An interrupted answer is not saved: claude sent no result for it
   if ((TURN_INTERRUPTED)); then

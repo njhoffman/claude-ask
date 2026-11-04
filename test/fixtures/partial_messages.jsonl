@@ -1,0 +1,37 @@
+{"type":"system","subtype":"init","session_id":"partial-001","model":"claude-haiku-5-5","cwd":"/x"}
+{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_k8Jn","role":"assistant","content":[]}},"session_id":"partial-001","ttft_ms":993,"thinking_display":"updates"}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}},"session_id":"partial-001","thinking_display":"updates"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"","estimated_tokens":50}},"session_id":"partial-001","thinking_display":"updates"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"","estimated_tokens":null}},"session_id":"partial-001","thinking_display":"updates"}
+{"type":"assistant","message":{"id":"msg_k8Jn","content":[{"type":"thinking","thinking":""}]},"session_id":"partial-001","thinking_duration_ms":478,"thinking_display":"updates"}
+{"type":"stream_event","event":{"type":"content_block_stop","index":0},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"I"}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"'ll read `"}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"a.txt` from"}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" the working directory and show its cont"}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"ents."}},"session_id":"partial-001"}
+{"type":"assistant","message":{"id":"msg_k8Jn","content":[{"type":"text","text":"I'll read `a.txt` from the working directory and show its contents."}]},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_stop","index":1},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"Read","input":{},"caller":{"type":"direct"}}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"file_path\":\"a.txt\"}"}},"session_id":"partial-001"}
+{"type":"assistant","message":{"id":"msg_k8Jn","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"a.txt"}}]},"session_id":"partial-001","wire_tool_inputs":{"toolu_1":{"file_path":"a.txt"}}}
+{"type":"stream_event","event":{"type":"content_block_stop","index":2},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null,"stop_details":null,"container":null,"safeguard_results":[{"type":"dangerous_tool_use","status":{"type":"available","tool_uses":{}}}]},"usage":{"input_tokens":2,"cache_creation_input_tokens":16274,"cache_read_input_tokens":9012,"output_tokens":260,"output_tokens_details":{"thinking_tokens":112},"iterations":[{"input_tokens":2,"output_tokens":260,"cache_read_input_tokens":9012,"cache_creation_input_tokens":16274,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":16274},"type":"message"}]},"context_management":{"applied_edits":[]}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"message_stop"},"session_id":"partial-001"}
+{"type":"rate_limit_event"}
+{"type":"user","session_id":"partial-001","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"hello"}]}}
+{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_g8Uv","role":"assistant","content":[]}},"session_id":"partial-001","ttft_ms":984,"thinking_display":"updates"}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The file `"}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a.txt` contains:"}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"\n\n```\nhello\n```"}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"\n\nIt"}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" holds one line of"}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" text,"}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" \"hello\"."}},"session_id":"partial-001"}
+{"type":"assistant","message":{"id":"msg_g8Uv","content":[{"type":"text","text":"The file `a.txt` contains:\n\n```\nhello\n```\n\nIt holds one line of text, \"hello\"."}]},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"content_block_stop","index":0},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"container":null,"safeguard_results":[{"type":"dangerous_tool_use","status":{"type":"available","tool_uses":{}}}]},"usage":{"input_tokens":2,"cache_creation_input_tokens":4233,"cache_read_input_tokens":25286,"output_tokens":33,"output_tokens_details":{"thinking_tokens":0},"iterations":[{"input_tokens":2,"output_tokens":33,"cache_read_input_tokens":25286,"cache_creation_input_tokens":4233,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":4233},"type":"message"}]},"context_management":{"applied_edits":[]}},"session_id":"partial-001"}
+{"type":"stream_event","event":{"type":"message_stop"},"session_id":"partial-001"}
+{"type":"result","subtype":"success","is_error":false,"result":"The file `a.txt` contains:\n\n```\nhello\n```\n\nIt holds one line of text, \"hello\".","session_id":"partial-001","total_cost_usd":0.0045912800000000005,"duration_ms":9214,"usage":{"input_tokens":4,"output_tokens":293},"permission_denials":[]}

@@ -1,8 +1,8 @@
 # claude-ask
 
 Ask Claude a question from the terminal. `claude-ask` runs
-`claude -p --output-format stream-json` and streams the answer through a
-pager, with a status bar (model and version, effort, tokens, cost, time)
+`claude -p --output-format stream-json` and streams the answer, word by word or
+through a pager block by block, with a status bar (model and version, effort, tokens, cost, time)
 drawn just below the
 text as it arrives; the final bar stays under the answer.
 
@@ -62,6 +62,15 @@ the answer. `\e` opens `$VISUAL` or `$EDITOR`, which can hold arguments
 In a terminal too narrow for the whole status bar, segments are left out
 from the right (done, duration, cost, tokens); `CLAUDE_ASK_COLUMNS` sets the
 width it is fitted to.
+
+## Streaming
+
+With `--no-pager`, or when stdout is a file or pipe, text appears word by word.
+With a pager, each finished block (a paragraph, a list, a whole code block) is
+rendered as it completes, since `nvcat` prints nothing until its input ends, so a
+long code block appears when it closes. Blocks are rendered one at a time, so
+spacing between them can differ a little from `--no-stream`, which renders the
+whole answer at the end.
 
 ## Pipes and files
 

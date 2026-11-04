@@ -56,6 +56,28 @@ on_screen() {
   [ "$screen_text" = "${long}TAILMORE" ]
 }
 
+@test "screen: a chunk ending exactly at the width keeps its last character" {
+  local full
+  full=$(printf 'x%.0s' {1..59})Z
+  FIXTURE="$TEST_TEMP_DIR/f"
+  fixture_of "$full" "TAIL" > "$FIXTURE"
+  on_screen 60 20
+  [ "$screen_text" = "${full}TAIL" ]
+}
+
+@test "screen: words arriving as deltas are placed like any text" {
+  FIXTURE="$TEST_TEMP_DIR/f"
+  {
+    printf '%s\n' '{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-5-5"}'
+    for t in "one " "two" $'\n\nthree ' "four five " "six"; do
+      jq -cn --arg t "$t" '{type: "stream_event", event: {type: "content_block_delta", delta: {type: "text_delta", text: $t}}}'
+    done
+    printf '%s\n' '{"type":"result","is_error":false,"result":"x","session_id":"s1","total_cost_usd":0.1,"duration_ms":100,"usage":{"input_tokens":1,"output_tokens":2}}'
+  } > "$FIXTURE"
+  on_screen 60 20
+  [ "$screen_text" = $'one two\nthree four five six' ]
+}
+
 @test "screen: wide characters are not overwritten" {
   FIXTURE="$TEST_TEMP_DIR/f"
   fixture_of "日本語日本語" "TAIL" > "$FIXTURE"

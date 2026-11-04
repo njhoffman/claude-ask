@@ -270,3 +270,65 @@ load test_helper
   sleep 0.2
   ! kill -0 "$pid" 2> /dev/null
 }
+
+# ---------------------------------------------------------------------------
+# Partial messages: recorded from claude 2.1.317 (--include-partial-messages)
+# ---------------------------------------------------------------------------
+@test "partial messages: text comes once, from the deltas" {
+  source_claude_ask
+  reset_stream_state
+  local chunks=0 line
+  while IFS= read -r line; do
+    process_stream_line "$line" || continue
+    if [[ -n "$CHUNK" ]]; then chunks=$((chunks + 1)); fi
+  done < "$FIXTURES_DIR/partial_messages.jsonl"
+  local result
+  result=$(jq -r 'select(.type == "result") | .result' "$FIXTURES_DIR/partial_messages.jsonl")
+  # Both messages, once each, a blank line between them
+  [[ "$answer_text" == *$'\n\n'"$result" ]]
+  [ "$(grep -o 'contains' <<< "$answer_text" | wc -l)" -eq 1 ]
+  [ "$chunks" -gt 5 ]
+  [ "$status" = "done" ]
+}
+
+@test "partial messages: what each event sets" {
+  source_claude_ask
+  reset_stream_state
+  se() { process_stream_line "{\"type\":\"stream_event\",\"event\":$1}"; }
+  se '{"type":"message_start","message":{"id":"m1"}}'
+  [ "$REDRAW_MAY_WAIT" -eq 1 ]
+  se '{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}'
+  [ "$is_thinking" -eq 1 ]
+  # Thinking and tool input are not the answer
+  se '{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}'
+  [ -z "$CHUNK" ] && [ -z "$answer_text" ]
+  se '{"type":"content_block_delta","delta":{"type":"text_delta","text":"He"}}'
+  [ "$CHUNK" = "He" ] && [ "$is_thinking" -eq 0 ]
+  se '{"type":"content_block_delta","delta":{"type":"text_delta","text":"llo "}}'
+  [ "$answer_text" = "Hello " ]
+  [ "$BLOCK_ENDED" -eq 0 ]
+  # Its assistant event repeats the block
+  process_stream_line '{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Hello "}]}}'
+  [ -z "$CHUNK" ] && [ "$answer_text" = "Hello " ]
+  se '{"type":"content_block_stop","index":0}'
+  [ "$BLOCK_ENDED" -eq 1 ]
+  se '{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","name":"Read"}}'
+  [ "$current_tool" = "Read" ]
+  se '{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"a\""}}'
+  [ -z "$CHUNK" ] && [ "$current_tool" = "Read" ]
+  process_stream_line '{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","name":"Read","input":{"file_path":"a.txt"}}]}}'
+  [ "$current_tool" = "Read: a.txt" ]
+  # A new message
+  se '{"type":"message_start","message":{"id":"m2"}}'
+  se '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Done"}}'
+  [ "$CHUNK" = $'\n\nDone' ]
+  [ -z "$current_tool" ]
+  [ "$answer_text" = $'Hello \n\nDone' ]
+}
+
+@test "partial messages: control characters are removed from deltas" {
+  source_claude_ask
+  reset_stream_state
+  process_stream_line '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"a\u001b]52;c;x\u0007b\n"}}}'
+  [ "$CHUNK" = $'a]52;c;xb\n' ]
+}
