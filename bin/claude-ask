@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # claude-ask - Ask Claude a question from the terminal with a styled status bar
 #
@@ -105,6 +105,16 @@
 #   CLAUDE_ASK_POPUP_PAGER  Pager for the answer in --popup (default: less -R -+F)
 
 set -euo pipefail
+
+# First, before anything bash 3.2 (macOS's own) would stumble on: mapfile,
+# coproc and EPOCHREALTIME are used from here on
+require_bash() {
+  if (($1 < 5)); then
+    echo "claude-ask: needs bash 5 or newer, and this is bash $1 ($BASH)" >&2
+    exit 1
+  fi
+}
+require_bash "${BASH_VERSINFO[0]}"
 
 # Started by --split or --popup: this shell's environment, which tmux would
 # not pass on, from the private file launch_in_tmux wrote. Deleting it is also
@@ -1051,7 +1061,7 @@ CONTROL_CHARS_RE='[\u0000-\u0008\u000b-\u001f\u007f-\u009f]'
 # the tool the event starts ("Bash: git status"), the tools a result says were
 # denied; for a stream_event (--include-partial-messages) what it is
 # ("content_block_delta:text_delta") and its value (the text, a tool's name or
-# a message's id).
+# a message's id); the tool call of the subagent it comes from, if any.
 # shellcheck disable=SC2016 # $u is a jq variable
 STREAM_FIELDS_JQ='
   (if .type == "result" then .usage else .message.usage end) as $u
@@ -1075,9 +1085,10 @@ STREAM_FIELDS_JQ='
        else null end),
       (if .type == "stream_event"
        then (.event.delta.text // .event.content_block.name // .event.message.id)
-       else null end) ]
+       else null end),
+      .parent_tool_use_id ]
   | map((. // "" | tostring | gsub("'"$CONTROL_CHARS_RE"'"; "")) + "\u0000") | add'
-STREAM_FIELD_COUNT=17
+STREAM_FIELD_COUNT=18
 
 # The parser is one jq that lives for the whole run, a coprocess fed one
 # line at a time, instead of a jq started for every event. It reads raw
@@ -1178,6 +1189,9 @@ process_stream_line() {
   case "${f[0]}" in
     system)
       if [[ -n "${f[1]}" ]]; then model=$(short_model_name "${f[1]}"); fi
+      # A run can go on after a result: with a background agent there is a
+      # result, a new init and more answer, up to a last result
+      if [[ -n "${f[1]}" && "$status" == "done" ]]; then status="running"; fi
       if [[ -n "${f[2]}" ]]; then session_id="${f[2]}"; fi
       ;;
     assistant)
@@ -1186,15 +1200,17 @@ process_stream_line() {
         # message, not part of the answer
         api_error="${f[11]}"
         stream_error="${f[3]:-$api_error}"
+      elif [[ -n "${f[17]}" ]]; then
+        # A subagent's own text is not the answer; what it reports back is
+        :
       elif [[ -n "${f[3]}" ]]; then
         if ((stream_text_unconfirmed)); then
           stream_text_unconfirmed=0
         else
           add_answer_text "${f[3]}" "${f[12]}"
         fi
-      elif [[ "${f[4]}" == 1 ]]; then
-        is_thinking=1
       fi
+      if [[ -z "${f[3]}" && "${f[4]}" == 1 ]]; then is_thinking=1; fi
       if [[ -n "${f[13]}" ]]; then
         is_thinking=0
         current_tool="${f[13]}"
@@ -1210,8 +1226,10 @@ process_stream_line() {
           current_tool="${f[16]}"
           ;;
         content_block_delta:text_delta)
-          add_answer_text "${f[16]}" "$stream_message_id"
-          stream_text_unconfirmed=1
+          if [[ -z "${f[17]}" ]]; then
+            add_answer_text "${f[16]}" "$stream_message_id"
+            stream_text_unconfirmed=1
+          fi
           ;;
         content_block_stop:* | message_stop:*) BLOCK_ENDED=1 ;;
       esac
@@ -1515,7 +1533,7 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
   # What was shown: every message, as process_stream_line joins them (a
   # blank line where the message id changes). The result event repeats only
   # the last one (or holds the error).
-  | (reduce ($events[] | select(.type == "assistant" and (.error | not))
+  | (reduce ($events[] | select(.type == "assistant" and (.error | not) and (.parent_tool_use_id == null))
              | {id: .message.id,
                 text: ([.message.content[]? | select(.type == "text") | .text] | join(""))}
              | select(.text != "")) as $e
@@ -2621,6 +2639,7 @@ ask_once() {
   if [[ -n "$MODEL" ]]; then claude_args+=(--model "$MODEL"); fi
   claude_args+=("${CLAUDE_ARGS[@]}")
 
+  ANSWER_STREAMED=1
   : > "$RAW_JSON"
   : > "$CLAUDE_STDERR"
   read_term_cols
@@ -3085,14 +3104,15 @@ chat_bind_keys() {
   CHAT_STTY=$(stty -g 2> /dev/null) || CHAT_STTY=""
 }
 
-# chat_read VAR PROMPT: read a line at the chat prompt into VAR. At a
+# chat_read VAR PROMPT [TEXT]: read a line at the chat prompt, starting with
+# TEXT, into VAR. At a
 # terminal the intr key is undefined for the read (Ctrl-C is chat_ctrl_c's
 # key there) and put back after it, so Ctrl-C still stops an answer.
 chat_read() {
   local _rc=0
   CHAT_PROMPT_SHOWN="${2//[$'\001\002']/}"
   if [[ -n "$CHAT_STTY" ]]; then stty intr undef 2> /dev/null || true; fi
-  IFS= read -r -e -p "$2" "$1" || _rc=$?
+  IFS= read -r -e -i "${3:-}" -p "$2" "$1" || _rc=$?
   if [[ -n "$CHAT_STTY" ]]; then stty "$CHAT_STTY" 2> /dev/null || true; fi
   return "$_rc"
 }
@@ -3114,6 +3134,22 @@ chat_prompt() {
   if [[ -n "$_label" ]]; then _p=$'\001'"${FG_DIM}"$'\002'"$_label "; fi
   _p+=$'\001'"${FG_CLAUDE}"$'\002''> '$'\001'"${RST}"$'\002'
   printf -v "$_out" '%s' "$_p"
+}
+
+# Lines typed while an answer streamed are waiting at the next prompt, and would
+# look like a paste. PREFILL has them, on one line with the newline mark, for the
+# prompt to show: nothing is asked until Enter, and nothing is lost. Only after
+# an answer: what is typed as a chat opens, or after a command, is just typing.
+ANSWER_STREAMED=0
+chat_typed_ahead() {
+  local typed
+  PREFILL=""
+  [[ -t 0 ]] && ((ANSWER_STREAMED)) || return 0
+  ANSWER_STREAMED=0
+  while read -r -t 0; do
+    IFS= read -r typed || break
+    if [[ -n "$typed" ]]; then PREFILL+="${PREFILL:+$CHAT_NEWLINE_MARK}$typed"; fi
+  done
 }
 
 # Whether more of a paste is waiting: at once, or after a moment, since over
@@ -3152,7 +3188,8 @@ chat_loop() {
     rc=0
     TURN_INTERRUPTED=0
     chat_prompt prompt
-    chat_read line "$prompt" || rc=$?
+    chat_typed_ahead
+    chat_read line "$prompt" "$PREFILL" || rc=$?
     if ((rc > 128 || TURN_INTERRUPTED)); then
       # A SIGINT at the prompt (chat_ctrl_c handles Ctrl-C): drop the line
       printf '\n'

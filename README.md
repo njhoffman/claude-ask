@@ -149,7 +149,8 @@ In a chat, these commands work at the prompt:
 A line whose first word is some other `/word` is refused as an unknown
 command; one like `/etc/hosts: what is this?` is asked as a question.
 Ctrl-C stops the answer being streamed without leaving the chat; at the
-prompt it clears the line, as a shell does. Questions are kept in
+prompt it clears the line, as a shell does. Lines typed during an answer wait at
+the next prompt, joined with `⏎`, until you press Enter. Questions are kept in
 `~/.local/state/claude-ask/history` for the up arrow; a multi-line one comes back
 on one line, with `⏎` for each line break. Each conversation is one session file with a `turns` list;
 `--history` shows the turn count, fitted to the terminal, and `--session` replays

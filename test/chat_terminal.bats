@@ -121,7 +121,7 @@ pty_chat() {
 }
 
 @test "pty: Ctrl-C at the prompt drops the line at once" {
-  pty_chat 'expect:> ' 'send:abc' 'expect:> abc' 'send:\x03' 'expect:abc^C' 'send:xyz\r' 'expect:chunks' 'expect:> ' 'send:exit\r'
+  pty_chat 'expect:> ' 'send:abc' 'expect:abc' 'send:\x03' 'expect:abc^C' 'send:xyz\r' 'expect:chunks' 'expect:> ' 'send:exit\r'
   [ "$status" -eq 0 ]
   # Only what was typed after Ctrl-C was asked
   [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
@@ -131,7 +131,7 @@ pty_chat() {
 
 @test "pty: Ctrl-C at the prompt works in vi mode" {
   printf 'set editing-mode vi\n' > "$INPUTRC"
-  pty_chat 'expect:> ' 'send:abc' 'expect:> abc' 'send:\x03' 'expect:abc^C' 'send:xyz\r' 'expect:chunks' 'expect:> ' 'send:exit\r'
+  pty_chat 'expect:> ' 'send:abc' 'expect:abc' 'send:\x03' 'expect:abc^C' 'send:xyz\r' 'expect:chunks' 'expect:> ' 'send:exit\r'
   [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
   grep -qF '| xyz' "$CLAUDE_STUB_LOG"
 }
@@ -173,4 +173,36 @@ pty_chat() {
   grep -qx 'a question' "$XDG_STATE_HOME/claude-ask/history"
   ! grep -q 'LAST_TURN_STATUS' "$XDG_STATE_HOME/claude-ask/history"
   ! grep -qx 'exit 0' "$XDG_STATE_HOME/claude-ask/history"
+}
+
+@test "pty: lines typed during an answer wait at the prompt for Enter" {
+  export CLAUDE_STUB_DELAY=0.2
+  pty_chat 'expect:> ' 'send:first\r' 'expect:connecting' 'send:typed one\rtyped two\r' 'expect:chunks' \
+    'expect:> typed one⏎typed two' 'sleep:0.5' 'send:\r' 'expect:turn 2' 'expect:> ' 'sleep:1' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 2 ]
+  grep -qF '| typed one\ntyped two' "$CLAUDE_STUB_LOG"
+}
+
+@test "pty: a line typed ahead is not sent without Enter, and can be cleared" {
+  export CLAUDE_STUB_DELAY=0.2
+  pty_chat 'expect:> ' 'send:first\r' 'expect:connecting' 'send:never asked\r' 'expect:> never asked' 'sleep:1' \
+    'send:\x03' 'expect:never asked^C' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+}
+
+@test "pty: a command typed ahead runs when Enter is pressed" {
+  export CLAUDE_STUB_DELAY=0.2
+  pty_chat 'expect:> ' 'send:first\r' 'expect:connecting' 'send:/quit\r' 'expect:> /quit' 'send:\r' 'sleep:0.3'
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+}
+
+@test "pty: what is typed as the chat opens is asked at once" {
+  # Sent with no wait for the prompt
+  pty_chat 'send:quick one\r' 'expect:chunks' 'expect:> ' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+  grep -qF '| quick one' "$CLAUDE_STUB_LOG"
 }

@@ -108,6 +108,10 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Tools**: stream fields 13 and 14 are the tool an event starts and the result's
   denied tools; `current_tool` is on the info line until a `user` event, text or
   the result.
+- **Subagents**: events carrying `parent_tool_use_id` (field 17) add no answer text,
+  here and in `SESSION_JQ`; their tools still show. A background agent means
+  several `result`s in a run, with a new `init` before more answer, which sets
+  `status` back to running. `test/fixtures/subagent.jsonl` is recorded.
 - **Answers**: events of one message share `.message.id`; a blank line goes
   where it changes, in `process_stream_line` and `SESSION_JQ` alike.
 - **Partial messages**: `claude` gets `--include-partial-messages`, so text comes
@@ -125,6 +129,10 @@ through a pager with a themed status bar redrawn just below the streamed text
   `STREAM_FIELD_COUNT` fields per input line, an empty one for bad input.
   The coprocess closes inherited fds and ignores
   SIGINT; it is restarted if it dies. `save_session` writes session files.
+- **Typed ahead**: `chat_typed_ahead` gathers lines waiting before a prompt into
+  `PREFILL`, for `read -i`, so nothing is asked without Enter (`chat_more_pasted`
+  gathers what arrives after it). They cannot be told from a paste, and asking
+  each could cost one paid question per line.
 - **Chat history**: read `-e` stops at a newline, so a multi-line question is held
   on one line with `CHAT_NEWLINE_MARK` (`⏎`), turned back on submit.
 - **Saved sessions**: `search_sessions` (`--search`), `delete_files` (asks at a
@@ -149,6 +157,10 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Renderers and format helpers** write into the variable named by their
   first argument (like `printf -v`), so a redraw forks nothing; their locals
   all start with `_`, so output variable names must not.
+- **Environment in tests**: CI has `TERM` unset or dumb, `SHELL=/bin/bash`, and no
+  controlling terminal. Several tests failed only there, so before a release also
+  run `env -i HOME="$HOME" PATH="$PATH" TERM=dumb LANG=C.UTF-8 setsid -w bats test
+  < /dev/null`.
 - **Testability**: the functions are sourceable with `_CLAUDE_ASK_SOURCED=1`;
   everything the tests call is defined before that guard.
   `common_setup` in `test/test_helper.bash` isolates each test (temp

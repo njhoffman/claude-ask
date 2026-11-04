@@ -7,8 +7,9 @@ Usage: pty_run.py STEP... -- COMMAND [ARG...]
 Steps, in order:
   send:TEXT     write TEXT (backslash escapes: \\r \\n \\t \\x1b ...)
   expect:TEXT   wait until TEXT has appeared in the output as it would
-                show on screen: escape sequences, readline's \\001 and
-                \\002 and carriage returns are left out (10s at most)
+                show on screen, after what the last expect matched: escape
+                sequences, readline's \\001 and \\002 and carriage returns
+                are left out (10s at most)
   sleep:SECS    wait
 
 PTY_SIZE=COLSxROWS in the environment sets the terminal size (default:
@@ -68,6 +69,7 @@ def main():
         return True
 
     status = 0
+    matched_to = 0  # in the screen text: where the last expect's match ended
     for step in steps:
         kind, _, value = step.partition(":")
         if kind == "send":
@@ -77,12 +79,14 @@ def main():
         elif kind == "expect":
             want = unescape(value)
             end = time.time() + 10
-            while want not in screen(out) and time.time() < end:
+            while screen(out).find(want, matched_to) < 0 and time.time() < end:
                 if not read_for(0.1):
                     break
-            if want not in screen(out):
+            found = screen(out).find(want, matched_to)
+            if found < 0:
                 status = 124
                 break
+            matched_to = found + len(want)
     read_for(1.0)
     try:
         os.kill(pid, 9)

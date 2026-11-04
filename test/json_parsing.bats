@@ -332,3 +332,41 @@ load test_helper
   process_stream_line '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"a\u001b]52;c;x\u0007b\n"}}}'
   [ "$CHUNK" = $'a]52;c;xb\n' ]
 }
+
+# ---------------------------------------------------------------------------
+# A background subagent: recorded from claude 2.1.317. Several results in a
+# run, and one line of a subagent's text added (that run's had none)
+# ---------------------------------------------------------------------------
+@test "subagent: its own text is not the answer, in any form" {
+  source_claude_ask
+  reset_stream_state
+  process_stream_line '{"type":"assistant","parent_tool_use_id":"t1","message":{"id":"s1","content":[{"type":"text","text":"inner"}]}}'
+  [ -z "$CHUNK" ] && [ -z "$answer_text" ]
+  process_stream_line '{"type":"stream_event","parent_tool_use_id":"t1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"inner"}}}'
+  [ -z "$CHUNK" ] && [ -z "$answer_text" ]
+  [ "$stream_text_unconfirmed" -eq 0 ]
+  # Its tools still show what is going on
+  process_stream_line '{"type":"assistant","parent_tool_use_id":"t1","message":{"id":"s1","content":[{"type":"tool_use","name":"Read","input":{"file_path":"a"}}]}}'
+  [ "$current_tool" = "Read: a" ]
+  # And its thinking does not disturb the main answer's
+  process_stream_line '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"mine"}}}'
+  process_stream_line '{"type":"assistant","parent_tool_use_id":"t1","message":{"id":"s1","content":[{"type":"text","text":"inner"}]}}'
+  [ "$stream_text_unconfirmed" -eq 1 ]
+  process_stream_line '{"type":"assistant","message":{"id":"m","content":[{"type":"text","text":"mine"}]}}'
+  [ "$answer_text" = "mine" ]
+}
+
+@test "subagent: after a result a new init means it is running again" {
+  source_claude_ask
+  reset_stream_state
+  local line
+  process_stream_line '{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"s"}'
+  process_stream_line '{"type":"result","is_error":false,"result":"first"}'
+  [ "$status" = "done" ]
+  process_stream_line '{"type":"system","subtype":"status"}' || true
+  [ "$status" = "done" ]
+  process_stream_line '{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"s"}'
+  [ "$status" = "running" ]
+  process_stream_line '{"type":"result","is_error":false,"result":""}'
+  [ "$status" = "done" ]
+}

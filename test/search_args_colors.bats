@@ -10,6 +10,8 @@ setup() {
   common_setup
   export CLAUDE_STUB_LOG="$TEST_TEMP_DIR/calls"
   PTY="$BATS_TEST_DIRNAME/helpers/pty_run.py"
+  # OSC 52 is not sent to a dumb terminal, which CI's TERM may be
+  export TERM=xterm-256color
 }
 
 # session NAME QUESTION ANSWER AGE_DAYS: a saved session that old

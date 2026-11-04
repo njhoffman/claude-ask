@@ -6,6 +6,23 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-03
+
+### Changed
+
+- Lines typed while an answer streams wait at the next prompt, editable and
+  joined with `⏎`, until Enter. Before, several of them were asked at once as one
+  question.
+
+### Fixed
+
+- Below bash 5 the script stops with a clear message, and it now finds bash on
+  `PATH` (`#!/usr/bin/env bash`), where `/bin/bash` is 3.2 on macOS.
+- A subagent's own text is not taken for the answer.
+- A run with a background agent has several results: the bar goes back to running
+  when more follows, instead of showing done while text still arrives.
+- The OSC 52 tests set `TERM` (`TERM=dumb` failed CI for 0.12.0).
+
 ## [0.12.0] - 2026-11-03
 
 ### Added

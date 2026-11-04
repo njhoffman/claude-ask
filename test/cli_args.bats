@@ -308,3 +308,20 @@ JSON
   [ "$status" -eq 1 ]
   [[ "$output" == *"requires a file name"* ]]
 }
+
+@test "the script finds bash on PATH and stops below bash 5" {
+  [ "$(head -1 "$SCRIPT_PATH")" = "#!/usr/bin/env bash" ]
+  source_claude_ask
+  run require_bash 5
+  [ "$status" -eq 0 ]
+  run require_bash 3
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"needs bash 5 or newer, and this is bash 3"* ]]
+}
+
+@test "the bash check comes before anything newer than 3.2" {
+  # Only the shebang, comments, set and blank lines may come before it
+  local first
+  first=$(grep -n -m1 -vE '^(#.*|set -euo pipefail|)$' "$SCRIPT_PATH" | cut -d: -f2)
+  [ "$first" = "require_bash() {" ]
+}

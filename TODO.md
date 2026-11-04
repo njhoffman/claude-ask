@@ -32,7 +32,7 @@ Reviewed: 2026-11-03
   there is no clipboard command, so outside tmux `-y` fails. Fall back to the
   OSC 52 escape, which most terminals and tmux pass to the local clipboard, and
   add `clip.exe` for WSL.
-- [ ] **Check the bash version.** (p3) [bug] The shebang is `#!/bin/bash`, which
+- [x] **Check the bash version.** (p3) [bug] The shebang is `#!/bin/bash`, which
   is 3.2 on macOS even with a newer bash installed, and nothing checks
   `BASH_VERSINFO`, so it fails with confusing errors (`mapfile`, `coproc`,
   `EPOCHREALTIME`), although `pbcopy` suggests macOS is meant to work. Use
@@ -40,7 +40,13 @@ Reviewed: 2026-11-03
 
 ## 6. Repository
 
-- [ ] **Text from subagents is shown as the answer.** (p3) [bug] Events from a
+- [ ] **Show background agents on the info line.** (p3) [feature] A subagent can
+  run in the background: its tool call gets a result at once, so the info line
+  goes quiet while `system` events (`task_started`, `task_progress`,
+  `task_notification`) report on it. Show its description until it finishes, as
+  with a running tool. `test/fixtures/subagent.jsonl` has the flow, without those
+  events, so record their fields again.
+- [x] **Text from subagents is shown as the answer.** (p3) [bug] Events from a
   subagent (a `Task` tool call) carry `parent_tool_use_id`, which nothing checks,
   so if their text is in the stream it would be shown and saved as part of the
   answer. Not checked against a real subagent run: record one, and skip events
@@ -52,7 +58,7 @@ Reviewed: 2026-11-03
   answer, and the column-counting code before 0.9.0 did it too. It matters more
   once partial messages make chunks end mid-line. Telling needs the column: count
   display width only to detect this case, and move to the next row first.
-- [ ] **Lines typed ahead during an answer merge into one question.** (p3) [bug]
+- [x] **Lines typed ahead during an answer merge into one question.** (p3) [bug]
   Two lines typed while an answer streams are waiting at the next prompt, so
   they look like a paste. Flushing typed-ahead input before the prompt would
   fix it, at the cost of losing a line typed ahead on purpose.

@@ -307,3 +307,17 @@ STUB
   [ "$(printf '%s' "$output" | strip_ansi | grep -o 'w ' | wc -l)" -ge 400 ]
   [ "$(grep -c 'chunks' <<< "$output")" -lt 200 ]
 }
+
+@test "a run with a background subagent: all the answer, once, and success" {
+  export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/subagent.jsonl"
+  run --separate-stderr env -u CLAUDE_ASK_FORCE_TTY "$SCRIPT_PATH" "q"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"SUBAGENT TEXT"* ]]
+  [ "$(grep -c 'still running' <<< "$output")" -eq 1 ]
+  [ "$(grep -c '^The subagent says hi' <<< "$output")" -eq 1 ]
+  [[ "$output" == *$'notification arrives.\n\nThe subagent says hi'* ]]
+  # The last result is empty; what was shown is what is saved
+  [ "$(jq -r .answer "$SESSION_DIR/q.json")" = "$output" ]
+  [ "$(jq -r .session_id "$SESSION_DIR/q.json")" = "subagent-001" ]
+  [ "$(jq -r .is_error "$SESSION_DIR/q.json")" = "false" ]
+}
