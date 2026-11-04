@@ -37,7 +37,7 @@ session() {
 # The options --help lists in its Options section: the start of each line
 # ("-e, --effort LEVEL  Effort ..." gives -e, --effort)
 help_options() {
-  "$SCRIPT_PATH" --help | sed -n '/^Options/,/^Examples:/p' | grep -E '^ +-' |
+  env -u CLAUDE_ASK_COLUMNS "$SCRIPT_PATH" --help | sed -n '/^Options/,/^Examples:/p' | grep -E '^ +-' |
     grep -oE '^ +-[^ ]*(, --?[^ ]*)?' | grep -oE -- '--?[a-zA-Z][a-zA-Z-]*' | sort -u
 }
 

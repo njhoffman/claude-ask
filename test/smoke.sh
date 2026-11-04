@@ -47,7 +47,7 @@ if [[ -n "$file" ]]; then
   check "it has a session id" test -n "$(jq -r '.session_id // ""' "$file")"
   check "it has the model" has "$(jq -r '.model // ""' "$file")" haiku
   check "it has the cost" test -n "$(jq -r '.cost_usd // ""' "$file")"
-  check "it is private" test "$(stat -c %a "$file" 2> /dev/null || stat -f %Lp "$file")" = 600
+  check "it is private" test "$(stat -c %a "$file")" = 600
   raw="${file%.json}.jsonl"
   check "text came as partial messages" grep -q '"text_delta"' "$raw"
 fi

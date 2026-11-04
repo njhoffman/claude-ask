@@ -29,7 +29,9 @@ teardown() {
 # PS1 is set in the pane's command: tmux runs it with $SHELL -c, and when
 # that is bash a non-interactive bash drops an inherited PS1.
 in_tmux() {
-  run python3 "$PTY" 'expect:READY$ ' "$@" 'send:exit\r' -- \
+  # The moment after the prompt: tmux is still finishing with the new client, and
+  # keys sent then can be lost
+  run python3 "$PTY" 'expect:READY$ ' 'sleep:0.5' "$@" 'send:exit\r' -- \
     tmux -L popup-test -f /dev/null new-session "PS1='READY\$ ' bash --norc --noprofile"
   screen_text=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b[()][A-Z0-9]//g' | tr -d '\001\002\r')
   # bats shows what a test prints only when it fails: what the client was

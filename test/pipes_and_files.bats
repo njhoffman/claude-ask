@@ -441,3 +441,113 @@ STUB
   # The first run as soon as the first block is done; the rest at the block's end
   [ "$(cat "$TEST_TEMP_DIR/pager-runs")" = $'[One.]\n[Two.\n\nThree]\n[Four]' ]
 }
+
+# results_fixture RESULT_JSON...: an answer's text, then those results, each after
+# an init, as a run with a background agent has
+results_fixture() {
+  local result i=0
+  for result in "$@"; do
+    i=$((i + 1))
+    printf '%s\n' '{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-5-5"}'
+    printf '{"type":"assistant","session_id":"s","message":{"id":"m%d","content":[{"type":"text","text":"part %d"}],"usage":{"input_tokens":1,"output_tokens":1}}}\n' "$i" "$i"
+    jq -c '{type: "result", is_error: false, session_id: "s", result: "x", total_cost_usd: 0.5} + .' <<< "$result"
+  done
+}
+
+@test "several results: modelUsage has the tokens, durations add, the API time does not" {
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  results_fixture \
+    '{"usage":{"input_tokens":4,"output_tokens":233},"duration_ms":11878,"duration_api_ms":11681,"modelUsage":{"h":{"inputTokens":5,"outputTokens":300}}}' \
+    '{"usage":{"input_tokens":4,"output_tokens":143},"duration_ms":1816,"duration_api_ms":11681,"modelUsage":{"h":{"inputTokens":10,"outputTokens":500,"cacheReadInputTokens":64113,"cacheCreationInputTokens":40270},"o":{"outputTokens":43}}}' \
+    '{"usage":{"input_tokens":0,"output_tokens":0},"duration_ms":7,"duration_api_ms":0,"result":"","modelUsage":{"h":{"inputTokens":10,"outputTokens":500,"cacheReadInputTokens":64113,"cacheCreationInputTokens":40270},"o":{"outputTokens":43}}}' \
+    > "$CLAUDE_STUB_FIXTURE"
+  run "$SCRIPT_PATH" --no-pager "q"
+  [ "$status" -eq 0 ]
+  [ "$(jq -c '[.usage.input_tokens, .usage.output_tokens, .usage.cache_read_input_tokens, .usage.cache_creation_input_tokens]' "$SESSION_DIR/q.json")" = "[10,543,64113,40270]" ]
+  [ "$(jq -c '[.duration_ms, .duration_api_ms, .cost_usd]' "$SESSION_DIR/q.json")" = "[13701,11681,0.5]" ]
+  local final
+  final=$(printf '%s' "$output" | strip_ansi | grep -a 'done' | tail -1)
+  [[ "$final" == *"in:10 out:543"* ]]
+  [[ "$final" == *"13.7s"* ]]
+}
+
+@test "several results with no modelUsage: the tokens add up, and it ignores an empty one" {
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  results_fixture \
+    '{"usage":{"input_tokens":100,"output_tokens":50},"duration_ms":100}' \
+    '{"usage":{"input_tokens":200,"output_tokens":70},"duration_ms":200}' \
+    '{"usage":{"input_tokens":0,"output_tokens":0},"duration_ms":7,"result":""}' \
+    > "$CLAUDE_STUB_FIXTURE"
+  run "$SCRIPT_PATH" --no-pager "q"
+  [ "$(jq -c '[.usage.input_tokens, .usage.output_tokens, .duration_ms]' "$SESSION_DIR/q.json")" = "[300,120,307]" ]
+  [[ "$(printf '%s' "$output" | strip_ansi | grep -a 'done' | tail -1)" == *"in:300 out:120"* ]]
+}
+
+@test "one result is unchanged, and an answer only in an earlier result is kept" {
+  run "$SCRIPT_PATH" --no-pager "q"
+  [ "$(jq -c '[.usage.input_tokens, .usage.output_tokens, .duration_ms]' "$SESSION_DIR/q.json")" = "[500,15,3200]" ]
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  {
+    printf '%s\n' '{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-5-5"}'
+    printf '%s\n' '{"type":"result","is_error":false,"result":"the text","session_id":"s","total_cost_usd":0.1,"duration_ms":1,"usage":{"input_tokens":1,"output_tokens":1}}'
+    printf '%s\n' '{"type":"result","is_error":false,"result":"","session_id":"s","total_cost_usd":0.1,"duration_ms":1,"usage":{"input_tokens":0,"output_tokens":0}}'
+  } > "$CLAUDE_STUB_FIXTURE"
+  run "$SCRIPT_PATH" --no-pager "r"
+  [ "$(jq -r .answer "$SESSION_DIR/r.json")" = "the text" ]
+}
+
+@test "denied tools from every result are named, each once" {
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  results_fixture \
+    '{"permission_denials":[{"tool_name":"Bash"},{"tool_name":"Write"}],"duration_ms":1,"usage":{"input_tokens":1,"output_tokens":1}}' \
+    '{"permission_denials":[{"tool_name":"Bash"},{"tool_name":"Read"}],"duration_ms":1,"usage":{"input_tokens":1,"output_tokens":1}}' \
+    '{"permission_denials":[],"duration_ms":1,"usage":{"input_tokens":1,"output_tokens":1}}' \
+    > "$CLAUDE_STUB_FIXTURE"
+  run --separate-stderr "$SCRIPT_PATH" --no-pager "q"
+  [[ "$stderr" == *"not permitted: Bash, Write, Read"* ]]
+}
+
+@test "a dumb terminal: no cursor moves, the answer and the final bar" {
+  export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/full_session.jsonl"
+  TERM=dumb CLAUDE_ASK_FORCE_TTY= run python3 "$PTY" 'sleep:1.2' -- "$SCRIPT_PATH" --no-pager q
+  [[ "$output" != *$'\e'* ]]
+  [[ "$output" == *"The capital of France"* ]]
+  [[ "$output" == *"sonnet 4.5"* ]]
+  [ "$(grep -c 'sonnet 4.5' <<< "$output")" -eq 1 ]
+  # Nor from a terminal with no TERM at all
+  CLAUDE_ASK_FORCE_TTY= run env -u TERM python3 "$PTY" 'sleep:1.2' -- "$SCRIPT_PATH" --no-pager r
+  [[ "$output" != *$'\e[J'* ]]
+}
+
+@test "a dumb terminal: Ctrl-C stops an answer cleanly" {
+  export CLAUDE_STUB_DELAY=0.4
+  TERM=dumb CLAUDE_ASK_FORCE_TTY= run python3 "$PTY" 'expect:> ' 'send:q\r' 'sleep:0.7' 'send:\x03' 'expect:(interrupted)' 'expect:> ' 'send:exit\r' -- "$SCRIPT_PATH" --no-pager
+  [[ "$output" != *$'\e[J'* ]]
+  [[ "$output" != *$'\eD'* ]]
+}
+
+@test "claude gets the user's locale; the script keeps its own number format" {
+  cat > "$TEST_TEMP_DIR/lc" <<STUB
+#!/bin/bash
+printf 'LC_ALL=[%s] LANG=[%s] LC_NUMERIC=[%s] set=[%s]\n' "\${LC_ALL-}" "\${LANG-}" "\${LC_NUMERIC-}" "\${LC_NUMERIC+y}" > "$TEST_TEMP_DIR/seen"
+cat "$FIXTURES_DIR/full_session.jsonl"
+STUB
+  chmod +x "$TEST_TEMP_DIR/lc"
+  export CLAUDE_ASK_BIN="$TEST_TEMP_DIR/lc"
+  run env LC_ALL=de_DE.UTF-8 LANG=en_US.UTF-8 LC_NUMERIC=de_DE.UTF-8 "$SCRIPT_PATH" --no-pager "q1"
+  [ "$(cat "$TEST_TEMP_DIR/seen")" = "LC_ALL=[de_DE.UTF-8] LANG=[en_US.UTF-8] LC_NUMERIC=[de_DE.UTF-8] set=[y]" ]
+  # What was not set stays not set
+  run env -u LC_ALL -u LC_NUMERIC LANG=C.UTF-8 "$SCRIPT_PATH" --no-pager "q2"
+  [ "$(cat "$TEST_TEMP_DIR/seen")" = "LC_ALL=[] LANG=[C.UTF-8] LC_NUMERIC=[] set=[]" ]
+  # And the cost still shows with a dot
+  [[ "$output" == *'$0.0123'* ]]
+}
+
+@test "the tmux environment file has the user's locale" {
+  export PATH="$STUB_DIR:$PATH" TMUX="/tmp/fake,1,0" CLAUDE_STUB_TMUX_LOG="$TEST_TEMP_DIR/tmux-calls"
+  run env -u LC_NUMERIC LC_ALL=de_DE.UTF-8 "$SCRIPT_PATH" --split "q"
+  local envfile
+  envfile=$(grep -o "_CLAUDE_ASK_ENV_FILE=[^' ]*" "$CLAUDE_STUB_TMUX_LOG" | cut -d= -f2)
+  grep -q '^export LC_ALL=de_DE.UTF-8$' "$envfile"
+  ! grep -q '^export LC_NUMERIC=' "$envfile"
+}

@@ -30,8 +30,8 @@ claude-ask --version                     # print the version
 claude-ask --help                        # every option
 ```
 
-Needs bash 5, `claude` (Claude Code) and `jq` 1.6 or newer; `--popup` needs tmux 3.2.
-CI runs on Ubuntu 22.04 and 24.04. Answers are rendered with
+For Linux. Needs bash 5, `claude` (Claude Code) and `jq` 1.6 or newer; `--popup` needs
+tmux 3.2. CI runs on Ubuntu 22.04 and 24.04. Answers are rendered with
 `nvcat --pager less` (Neovim Markdown rendering, paged with `less` when
 printed straight to the terminal); without `nvcat` they print as plain text.
 `--pager CMD` (run with `bash -c`) or `CLAUDE_ASK_PAGER` picks another

@@ -369,7 +369,7 @@ help_in_pty() {
 
 @test "--help lines up its columns, one line for each thing" {
   local help
-  help=$("$SCRIPT_PATH" --help)
+  help=$(env -u CLAUDE_ASK_COLUMNS "$SCRIPT_PATH" --help)
   # Options: where the description starts is the same on every line
   [ "$(sed -n '/^Options/,/^Examples:/p' <<< "$help" | grep -cE '^ +-')" -gt 20 ]
   sed -n '/^Options/,/^Examples:/p' <<< "$help" | grep -E '^ +-' | python3 -c '
@@ -389,4 +389,107 @@ assert len(starts) == 1, starts'
   [[ "$help" == *$'\n  -i, --interactive '* ]]
   ! sed -n '/^Options/,/^Examples:/p' <<< "$help" | grep -E '^ +[^ -]'
   ! sed -n '/^Environment:/,$p' <<< "$help" | grep -E '^   '
+}
+
+# help_at WIDTH: --help as a terminal of that width shows it, without color codes,
+# and with no carriage returns
+help_at() {
+  PTY_SIZE="${1}x60" TERM=xterm-256color run python3 "$BATS_TEST_DIRNAME/helpers/pty_run.py" -- env -u CLAUDE_ASK_COLUMNS "$SCRIPT_PATH" --help
+  [ "$status" -eq 0 ]
+  help_text=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\r')
+}
+
+@test "--help wraps long descriptions under their own column" {
+  help_at 80
+  # Nothing but examples goes past the width
+  sed '/^Examples:/,/^Environment:/d' <<< "$help_text" | awk 'length($0) > 80 { bad = 1 } END { exit bad }'
+  # Where the options' descriptions start, and every wrapped line starts there too
+  local options col
+  options=$(sed -n '/^Options/,/^Examples:/p' <<< "$help_text" | sed '1d;$d' | grep -v '^$')
+  col=$(python3 -c '
+import re, sys
+lines = sys.stdin.read().splitlines()
+col = re.search(r"\S  +(\S)", lines[0]).start(1)
+for l in lines:
+    if re.match(r" +-", l) and re.search(r"\S  +(\S)", l):
+        assert re.search(r"\S  +(\S)", l).start(1) == col, l
+    else:
+        assert len(l) - len(l.lstrip()) == col, l
+print(col)' <<< "$options")
+  [ "$col" -gt 20 ]
+  # Some did wrap, and the variables likewise
+  [ "$(grep -cE "^ {$col}[^ ]" <<< "$options")" -gt 3 ]
+  sed -n '/^Environment:/,$p' <<< "$help_text" | sed '1d' | python3 -c '
+import re, sys
+lines = [l for l in sys.stdin.read().split("\n") if l]
+col = re.search(r"\S  +(\S)", lines[0]).start(1)
+for l in lines:
+    if not l.startswith(" " * col):
+        assert re.search(r"\S  +(\S)", l).start(1) == col, l'
+}
+
+@test "--help keeps every word when it wraps, and the examples whole" {
+  local whole
+  whole=$(env -u CLAUDE_ASK_COLUMNS "$SCRIPT_PATH" --help)
+  help_at 60
+  [ "$(tr -s ' \n' ' ' <<< "$help_text")" = "$(tr -s ' \n' ' ' <<< "$whole")" ]
+  grep -qx '  claude-ask -Y "A bash loop over lines of a file"  # copy the code' <<< "$help_text"
+}
+
+@test "--help keeps a wide terminal on one line each" {
+  local whole
+  whole=$(env -u CLAUDE_ASK_COLUMNS "$SCRIPT_PATH" --help)
+  help_at 1000
+  [ "$help_text" = "$whole" ]
+}
+
+@test "--help in a very narrow terminal falls back to a small indent" {
+  help_at 40
+  sed -n '/^Options/,/^Examples:/p' <<< "$help_text" | grep -q '^        Keep the chat open'
+  sed -n '/^Options/,/^Examples:/p' <<< "$help_text" | grep -q '^  -i, --interactive *$'
+  # Only the heading, which stays one line, and two paths with no place to break
+  sed '/^Examples:/,/^Environment:/d' <<< "$help_text" | awk 'length($0) > 40 { n++ } END { exit n > 3 }'
+}
+
+@test "--help to a pipe stays whole unless a width is given; color does not count" {
+  run env -u CLAUDE_ASK_COLUMNS "$SCRIPT_PATH" --help
+  [[ "$output" == *"Continue the most recent saved session (with a question: ask it there; without: chat there)"* ]]
+  run env CLAUDE_ASK_COLUMNS=70 "$SCRIPT_PATH" --help
+  [[ "$output" != *"Continue the most recent saved session (with a question: ask it there; without: chat there)"* ]]
+  sed '/^Examples:/,/^Environment:/d' <<< "$output" | awk 'length($0) > 70 { bad = 1 } END { exit bad }'
+  # With color at the same width: the same line breaks
+  local plain="$output"
+  CLAUDE_ASK_COLUMNS=70 TERM=xterm-256color run python3 "$BATS_TEST_DIRNAME/helpers/pty_run.py" -- "$SCRIPT_PATH" --help
+  [[ "$output" == *$'\e[36m'* ]]
+  [ "$(printf '%s' "$output" | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\r')" = "$plain" ]
+}
+
+@test "--help with NO_COLOR at a terminal still fits the width" {
+  NO_COLOR=1 CLAUDE_ASK_COLUMNS=70 TERM=xterm-256color run python3 "$BATS_TEST_DIRNAME/helpers/pty_run.py" -- "$SCRIPT_PATH" --help
+  [[ "$output" != *$'\e['* ]]
+  sed '/^Examples:/,/^Environment:/d' <<< "$(tr -d '\r' <<< "$output")" | awk 'length($0) > 70 { bad = 1 } END { exit bad }'
+}
+
+@test "--help: a word too long for the column moves the entry to the small indent" {
+  CLAUDE_ASK_COLUMNS=60 run "$SCRIPT_PATH" --help
+  [[ "$output" == *$'\n  SESSION_DIR\n        Where sessions are saved'* ]]
+  # Nothing past the width, or under the names' column
+  sed '/^Examples:/,/^Environment:/d' <<< "$output" | grep -v '^Options' | awk 'length($0) > 60 { bad = 1 } END { exit bad }'
+}
+
+@test "--version: the script and VERSION agree, and a copy of the script knows" {
+  run "$SCRIPT_PATH" --version
+  [ "$output" = "claude-ask $(cat "$SCRIPT_DIR/VERSION")" ]
+  mkdir "$TEST_TEMP_DIR/alone"
+  cp "$SCRIPT_PATH" "$TEST_TEMP_DIR/alone/claude-ask"
+  run "$TEST_TEMP_DIR/alone/claude-ask" --version
+  [ "$output" = "claude-ask $(cat "$SCRIPT_DIR/VERSION")" ]
+}
+
+@test "no controlling terminal: nothing about /dev/tty on stderr" {
+  # stdout and stderr to files, in a new session with no terminal
+  unset CLAUDE_ASK_COLUMNS COLUMNS
+  setsid -w env -u CLAUDE_ASK_FORCE_TTY "$SCRIPT_PATH" --pager cat "q" > "$TEST_TEMP_DIR/out" 2> "$TEST_TEMP_DIR/err"
+  [ ! -s "$TEST_TEMP_DIR/err" ]
+  grep -q 'capital of France' "$TEST_TEMP_DIR/out"
 }

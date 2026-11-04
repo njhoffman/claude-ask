@@ -6,47 +6,13 @@ normal or `(p3)` low, and a category: `[bug]`, `[feature]`, `[refactor]`,
 
 Reviewed: 2026-11-03
 
-## 8. Runs with several results
-
-- [ ] **Denied tools are lost when a later result has none.** (p2) [bug] A run with a
-  background agent has several `result` events, and `denied_tools` takes the last:
-  denied in the first and none in the second prints no `not permitted` line (checked).
-  Collect them over the whole answer.
-- [ ] **Saved tokens are zero after a background agent.** (p2) [bug] The recorded run's
-  results have 233, 143 and then 0 output tokens, and `SESSION_JQ` uses only the last,
-  so `usage` saves as 0 (checked with a fixture of that shape). `process_stream_line`
-  also takes a `0` as a value, so the final bar should show 0 too. Add them up over a
-  turn's results, or ignore a result with no tokens. The cost is cumulative already,
-  so it stays as it is: check that before adding anything else up.
-
-## 9. Environments
-
-- [x] **`--split` and `--popup` fail with an exported `SHELLOPTS` or `BASHOPTS`.** (p2)
-  [bug] Both are readonly, so sourcing the environment file stops the new run with
-  `SHELLOPTS: readonly variable` under `set -e` (checked). Leave them out of the file,
-  with `UID`, `EUID` and `PPID`, and do not let a variable it cannot set end the run.
-- [ ] **A dumb terminal gets cursor moves.** (p3) [bug] `TERM=dumb` turns colors off
-  since 0.12.0, but the bar still redraws with `\eD`, `\e7` and `\e[J` (14 lines of them
-  in a short run), which show as garbage in such a terminal. Treat it like stdout not
-  being a terminal, with just the final bar.
-- [ ] **`claude` and its tools get a changed locale.** (p3) [bug] The script exports
-  `LC_NUMERIC=C` and moves `LC_ALL` to `LANG` for its own number formatting, and
-  `claude` inherits that (checked: `LC_ALL` empty, `LC_NUMERIC=C`), so a command a tool
-  runs formats numbers differently than in the user's shell. Restore the original
-  values for the `claude` process only.
-- [ ] **macOS is half supported and never run.** (p3) [test] The script has `pbcopy`, a
-  `stat -f` fallback in `just smoke` and the bash check for it, but nothing runs there,
-  and the tests use `setsid`, `touch -d` and `stat -c`. Add a macOS CI job with a
-  newer bash, or state that it is Linux only and remove the pretence. Not tried: what
-  fails there is unknown.
-
 ## 10. Small bugs and suggestions
 
 - [ ] **A question of only digits makes a session its number hides.** (p3) [bug] Asking
   `5` saves `5.json`, and `--session 5`, `--resume=5` and `--delete 5` mean the fifth
   newest whenever there are five, so that session can only be reached by its number.
   `--delete --force` could remove the wrong one. Give such a slug a prefix (`q-5`).
-- [ ] **`--version` says `unknown` for a copy of the script.** (p3) [bug] It reads
+- [x] **`--version` says `unknown` for a copy of the script.** (p3) [bug] It reads
   `VERSION` beside `bin/`, though `--completions` was built to work from a copy alone
   (checked). Keep the version in the script as well, with a test that they match, or
   have `just lint` check it.
@@ -75,6 +41,35 @@ Reviewed: 2026-11-03
   timing in them, so they may need to stay serial.
 
 ## Completed
+
+### 9. Environments (completed 2026-11-03)
+
+- [x] **`--split` and `--popup` fail with an exported `SHELLOPTS` or `BASHOPTS`.** (p2)
+  [bug] Both are readonly, so sourcing the environment file stops the new run with
+  `SHELLOPTS: readonly variable` under `set -e` (checked). Leave them out of the file,
+  with `UID`, `EUID` and `PPID`, and do not let a variable it cannot set end the run.
+- [x] **A dumb terminal gets cursor moves.** (p3) [bug] `TERM=dumb` turns colors off
+  since 0.12.0, but the bar still redraws with `\eD`, `\e7` and `\e[J` (14 lines of them
+  in a short run), which show as garbage in such a terminal. Treat it like stdout not
+  being a terminal, with just the final bar.
+- [x] **`claude` and its tools get a changed locale.** (p3) [bug] The script exports
+  `LC_NUMERIC=C` and moves `LC_ALL` to `LANG` for its own number formatting, and
+  `claude` inherits that (checked: `LC_ALL` empty, `LC_NUMERIC=C`), so a command a tool
+  runs formats numbers differently than in the user's shell. Restore the original
+  values for the `claude` process only.
+
+### 8. Runs with several results (completed 2026-11-03)
+
+- [x] **Denied tools are lost when a later result has none.** (p2) [bug] A run with a
+  background agent has several `result` events, and `denied_tools` takes the last:
+  denied in the first and none in the second prints no `not permitted` line (checked).
+  Collect them over the whole answer.
+- [x] **Saved tokens are zero after a background agent.** (p2) [bug] The recorded run's
+  results have 233, 143 and then 0 output tokens, and `SESSION_JQ` uses only the last,
+  so `usage` saves as 0 (checked with a fixture of that shape). `process_stream_line`
+  also takes a `0` as a value, so the final bar should show 0 too. Add them up over a
+  turn's results, or ignore a result with no tokens. The cost is cumulative already,
+  so it stays as it is: check that before adding anything else up.
 
 ### 7. Block rendering (completed 2026-11-03)
 

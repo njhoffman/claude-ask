@@ -6,6 +6,25 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-11-03
+
+### Changed
+
+- `--help` fits the terminal: long descriptions wrap under their own column, not
+  under the options. To a pipe its lines stay whole, unless `CLAUDE_ASK_COLUMNS` is set.
+- `TERM=dumb` gets no status bar redraws or other cursor moves, just the final bar.
+
+### Fixed
+
+- A run with a background agent, which has several results, is saved and shown
+  properly: tokens are the whole run's, with the subagent's, not the last result's
+  (often 0); the duration is the whole run's, not the last result's (a few
+  milliseconds); and denied tools from any result are named.
+- `claude`, its tools and `--split` and `--popup` get the user's own locale, not the
+  `LC_NUMERIC=C` this script uses for its own numbers.
+- `--version` works for a copy of the script.
+- With no controlling terminal, as under cron, no `/dev/tty` error is printed.
+
 ## [0.15.2] - 2026-11-03
 
 ### Fixed

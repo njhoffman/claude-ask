@@ -6,7 +6,7 @@
 #
 # With no question (and a terminal on stdin) it opens a chat: each answer is followed by a "> " prompt for the next question in the same conversation. At the prompt, \e composes the question in $EDITOR; /effort [LEVEL] and /model [NAME] show or change the effort level and model for the next questions ("default" clears them); /yank [code [N]] copies the last answer or its code blocks; /help lists the rest, and Tab completes them; exit, quit or Ctrl-D ends the chat; Ctrl-C stops the current answer (at the prompt, it clears the line). Piped input is read as the question, or added after the one given; with -i the chat then goes on at the terminal. When stdout is not a terminal it gets only the answer.
 #
-# Options (values also as --option=VALUE, short flags can be bundled: -ir):
+# Options (--option=VALUE also works; short flags bundle: -ir):
 #   -i, --interactive        Keep the chat open after answering the question
 #   -r, --resume             Continue the most recent saved session (with a question: ask it there; without: chat there); it keeps the session's effort and model unless -e or -m is given
 #       --resume=ID|N        The same for the session that ID or N names (as for --session: a --history number, a name or a prefix)
@@ -30,7 +30,7 @@
 #       --force              Do not ask; without a terminal, needed to delete at all
 #       --claude-arg WORD    One more word for claude's command line (repeat for each, so --claude-arg --add-dir --claude-arg ../src); -r keeps them and says which
 #       --session [ID|N]     View a saved session by name/id or index number
-#       --debug-log[=FILE]   Write debug messages to FILE (default: ${XDG_STATE_HOME:-~/.local/state}/claude-ask/debug.log)
+#       --debug-log[=FILE]   Write debug messages to FILE (default: ~/.local/state/claude-ask/debug.log, or under XDG_STATE_HOME)
 #       --completions SHELL  Print the completion script for bash, zsh or fish: eval "$(claude-ask --completions bash)", source <(claude-ask --completions zsh), claude-ask --completions fish | source
 #       --version            Print the version and exit
 #   -h, --help               Show this help message
@@ -59,7 +59,7 @@
 #   claude-ask --debug-log "What is 2+2?"             # enable debug logging
 #
 # Environment:
-#   SESSION_DIR                   Where sessions are saved (default: ${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions)
+#   SESSION_DIR                   Where sessions are saved (default: ~/.local/share/claude-ask/sessions, or under XDG_DATA_HOME)
 #   VISUAL, EDITOR                The editor for \e, with any arguments (default: vi)
 #   CLAUDE_ASK_BIN                The claude command to run (default: claude)
 #   CLAUDE_ASK_PAGER              The default pager command (default: nvcat --pager less)
@@ -105,6 +105,20 @@ fi
 # from jq with a "." and printf would reject it under a comma-decimal
 # LC_NUMERIC; EPOCHREALTIME would use a ","). LC_ALL would
 # override LC_NUMERIC, so it moves to LANG, keeping the character encoding.
+# That is for this script: restore_locale puts them back for what it starts on the
+# user's behalf.
+ORIG_LOCALE=()
+for _var in LC_ALL LANG LC_NUMERIC; do
+  if [[ -n "${!_var+set}" ]]; then ORIG_LOCALE+=("$_var=${!_var}"); fi
+done
+unset _var
+restore_locale() {
+  local entry
+  unset LC_ALL LANG LC_NUMERIC
+  for entry in "${ORIG_LOCALE[@]}"; do
+    export "${entry%%=*}=${entry#*=}"
+  done
+}
 if [[ -n "${LC_ALL:-}" ]]; then
   export LANG="$LC_ALL"
   unset LC_ALL
@@ -177,36 +191,95 @@ debug_log() {
 # ---------------------------------------------------------------------------
 # CLI argument parsing
 # ---------------------------------------------------------------------------
-# Print the version from the VERSION file next to bin/ (the script is
-# usually installed as a symlink into the repo, so resolve it first)
+# In the script itself, so a copy of it knows; a test keeps it the same as VERSION
+CLAUDE_ASK_VERSION="0.15.3"
 print_version() {
-  local root version="unknown"
-  root="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.."
-  if [[ -r "$root/VERSION" ]]; then
-    version=$(< "$root/VERSION")
-  fi
-  printf 'claude-ask %s\n' "$version"
+  printf 'claude-ask %s\n' "$CLAUDE_ASK_VERSION"
 }
 
-# --help: the header comment, in color at a terminal. Plain ANSI colors, which
-# any depth of terminal shows, since the palette is not set up yet here.
+# --help: the header comment, in color at a terminal and fitted to its width.
+# Plain ANSI colors, which any depth of terminal shows, since the palette is not
+# set up yet here.
 usage() {
-  local text head opt env dim off
+  local text head opt env dim off cols="${CLAUDE_ASK_COLUMNS:-}" size
   text=$(sed -n '2,/^$/s/^# \{0,1\}//p' "$0")
-  if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${CLAUDE_ASK_COLORS:-}" == none || "${TERM:-}" == dumb ]]; then
-    printf '%s\n' "$text"
-    exit 0
+  if [[ -t 1 && -z "${NO_COLOR:-}" && "${CLAUDE_ASK_COLORS:-}" != none && "${TERM:-}" != dumb ]]; then
+    head=$'\e[1;33m' opt=$'\e[36m' env=$'\e[32m' dim=$'\e[2m' off=$'\e[0m'
+    # The headings last: the ranges below look for them without their color
+    text=$(printf '%s\n' "$text" | sed -E \
+      -e "/^Options/,/^Examples/s~^( +)(-([^ ]| [^ ])*)~\1$opt\2$off~" \
+      -e "/^Examples/,/^Environment/s~(  +# .*)\$~$dim\1$off~" \
+      -e "/^Environment/,\$s~^  ([A-Z]([^ ]| [^ ])*)~  $env\1$off~" \
+      -e "s~^(Usage:)~$head\1$off~" \
+      -e "s~^((Options|Examples|Environment).*:)\$~$head\1$off~")
   fi
-  head=$'\e[1;33m' opt=$'\e[36m' env=$'\e[32m' dim=$'\e[2m' off=$'\e[0m'
-  # The headings last: the ranges below look for them without their color
-  printf '%s\n' "$text" | sed -E \
-    -e "/^Options/,/^Examples/s~^( +)(-([^ ]| [^ ])*)~\1$opt\2$off~" \
-    -e "/^Examples/,/^Environment/s~(  +# .*)\$~$dim\1$off~" \
-    -e "/^Environment/,\$s~^  ([A-Z]([^ ]| [^ ])*)~  $env\1$off~" \
-    -e "s~^(Usage:)~$head\1$off~" \
-    -e "s~^((Options|Examples|Environment).*:)\$~$head\1$off~"
+  if [[ -z "$cols" && -t 1 ]] && size=$(stty size 2> /dev/null < /dev/tty); then
+    cols="${size#* }"
+  fi
+  if [[ "$cols" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s\n' "$text" | awk -v cols="$cols" "$USAGE_WRAP_AWK"
+  else
+    printf '%s\n' "$text"
+  fi
   exit 0
 }
+
+# Wrap --help to cols: a paragraph at the left edge, and an option's or a
+# variable's description under where it starts. That is after the first two or
+# more spaces past the name, which no name has. With under 20 columns left there,
+# or a word that would not fit in them, it goes under a small indent instead, so
+# nothing runs back into the names. Examples stay whole: a wrapped command
+# would be a wrong one. Lengths are counted without color codes.
+# shellcheck disable=SC2016 # awk program
+USAGE_WRAP_AWK='
+  function visible(s) { gsub(/\033\[[0-9;]*m/, "", s); return length(s) }
+  function wrap(first, rest, indent, width,   n, words, i, line, pad) {
+    pad = sprintf("%" indent "s", "")
+    n = split(rest, words, " ")
+    line = first
+    used = visible(first)
+    for (i = 1; i <= n; i++) {
+      if (i > 1 && used + 1 + length(words[i]) > cols) {
+        print line
+        line = pad words[i]
+        used = indent + length(words[i])
+      } else if (i == 1) {
+        line = line words[i]
+        used += length(words[i])
+      } else {
+        line = line " " words[i]
+        used += 1 + length(words[i])
+      }
+    }
+    print line
+  }
+  {
+    plain = $0
+    gsub(/\033\[[0-9;]*m/, "", plain)
+    if (plain ~ /^Options/) { section = "list" }
+    else if (plain ~ /^Examples/) { section = "examples" }
+    else if (plain ~ /^Environment/) { section = "list" }
+    if (visible($0) <= cols || section == "examples" || plain ~ /^(Options|Environment)/) {
+      print
+    } else if (section == "list" && match($0, /[^ ]  +[^ ]/)) {
+      headlen = RSTART + RLENGTH - 2
+      first = substr($0, 1, headlen)
+      rest = substr($0, headlen + 1)
+      indent = visible(first)
+      longest = 0
+      n = split(rest, parts, " ")
+      for (w = 1; w <= n; w++) if (length(parts[w]) > longest) longest = length(parts[w])
+      if (cols - indent < 20 || longest > cols - indent) {
+        sub(/ +$/, "", first)
+        print first
+        wrap("        ", rest, 8, cols)
+      } else {
+        wrap(first, rest, indent, cols)
+      }
+    } else {
+      wrap("", $0, 0, cols)
+    }
+  }'
 
 # print_completions SHELL: the completion script for SHELL. They are all here,
 # so a script copied on its own can still print them. test/completion.bats runs
@@ -864,6 +937,8 @@ SEP_POWERLINE=$'\ue0b0'    #
 COLOR_DEPTH="${CLAUDE_ASK_COLORS:-}"
 if [[ -n "${NO_COLOR:-}" ]]; then
   COLOR_DEPTH=none
+elif [[ -z "$COLOR_DEPTH" && "${TERM:-}" == dumb && -z "${CLAUDE_ASK_FORCE_TTY:-}" ]]; then
+  COLOR_DEPTH=none
 elif [[ -z "$COLOR_DEPTH" ]]; then
   case "${COLORTERM:-}:${TERM:-}" in
     truecolor:* | 24bit:*) COLOR_DEPTH=truecolor ;;
@@ -937,6 +1012,15 @@ else
   exec {BAR_FD}> /dev/null
 fi
 if ((!OUT_TTY)) && [[ "$PAGER_IS_DEFAULT" -eq 1 ]]; then USE_PAGER=0; fi
+
+# A dumb terminal shows cursor moves as garbage: no redrawing there, just the
+# final bar. The tests' stand-in for a terminal draws whatever TERM says.
+CLEAR_BELOW=$'\e[J'
+CURSOR_MOVES=1
+if [[ "${TERM:-dumb}" == dumb && -z "${CLAUDE_ASK_FORCE_TTY:-}" ]]; then
+  CLEAR_BELOW=""
+  CURSOR_MOVES=0
+fi
 
 # Spinner frames
 SPINNER=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
@@ -1119,7 +1203,7 @@ read_term_cols() {
   local size
   if [[ -n "${CLAUDE_ASK_COLUMNS:-}" ]]; then
     TERM_COLS="$CLAUDE_ASK_COLUMNS"
-  elif size=$(stty size < /dev/tty 2> /dev/null); then
+  elif size=$(stty size 2> /dev/null < /dev/tty); then
     TERM_COLS="${size#* }"
   else
     TERM_COLS="${COLUMNS:-0}"
@@ -1288,6 +1372,9 @@ reset_stream_state() {
   current_tool="" # the tool running now, for the info line
   background_tasks="" # the agents running in the background, for the info line
   result_seen=0
+  result_duration=0
+  result_input=0
+  result_output=0
   denied_tools="" # the tools the result says were denied
   answer_lines=0
   answer_chars=0
@@ -1313,7 +1400,14 @@ CONTROL_CHARS_RE='[\u0000-\u0008\u000b-\u001f\u007f-\u009f]'
 # background_tasks_changed event "tasks:" and what is running.
 # shellcheck disable=SC2016 # $u is a jq variable
 STREAM_FIELDS_JQ='
-  (if .type == "result" then .usage else .message.usage end) as $u
+  # A result with modelUsage: that has the whole run, with any subagent. Its usage
+  # is only that part of the run
+  ((.modelUsage // {}) | [.[]]) as $models
+  | (if .type != "result" then .message.usage
+     elif ($models | length) > 0 then
+       {input_tokens: ($models | map(.inputTokens // 0) | add),
+        output_tokens: ($models | map(.outputTokens // 0) | add)}
+     else .usage end) as $u
   | [ .type, .model, .session_id,
       ([.message.content[]? | select(.type == "text") | .text] | join("")),
       (if any(.message.content[]?; .type == "thinking") then 1 else 0 end),
@@ -1338,9 +1432,10 @@ STREAM_FIELDS_JQ='
       .parent_tool_use_id,
       (if .subtype == "background_tasks_changed"
        then "tasks:" + ([.tasks[]? | .description // "agent"] | join(", "))
-       else null end) ]
+       else null end),
+      (if ($models | length) > 0 then 1 else null end) ]
   | map((. // "" | tostring | gsub("'"$CONTROL_CHARS_RE"'"; "")) + "\u0000") | add'
-STREAM_FIELD_COUNT=19
+STREAM_FIELD_COUNT=20
 
 # The parser is one jq that lives for the whole run, a coprocess fed one
 # line at a time, instead of a jq started for every event. It reads raw
@@ -1398,6 +1493,19 @@ stream_fields() {
   for ((i = 0; i < STREAM_FIELD_COUNT; i++)); do
     STREAM_F[i]=""
     IFS= read -r -d '' "STREAM_F[i]" <&"${STREAM_JQ[0]}" || return 1
+  done
+}
+
+# add_denied_tools "A, B": add to denied_tools, each tool once; a run can have
+# several results, and each lists only its own
+add_denied_tools() {
+  local tool rest="$1"
+  while [[ -n "$rest" ]]; do
+    tool="${rest%%, *}"
+    if [[ "$rest" == *", "* ]]; then rest="${rest#*, }"; else rest=""; fi
+    if [[ ", $denied_tools, " != *", $tool, "* ]]; then
+      denied_tools+="${denied_tools:+, }$tool"
+    fi
   done
 }
 
@@ -1500,10 +1608,22 @@ process_stream_line() {
       if [[ -z "$background_tasks" ]]; then status="done"; fi
       result_seen=1
       current_tool=""
-      denied_tools="${f[14]}"
+      add_denied_tools "${f[14]}"
       result_text="${f[10]}"
+      # A run can have several results. The cost is the whole run's in each, the
+      # duration only that part's, and the tokens the whole run's with modelUsage
       if [[ -n "${f[7]}" ]]; then cost="${f[7]}"; fi
-      if [[ -n "${f[8]}" ]]; then duration_ms="${f[8]}"; fi
+      if [[ -n "${f[8]}" ]]; then
+        result_duration=$((result_duration + ${f[8]%.*}))
+        duration_ms="$result_duration"
+      fi
+      if [[ -n "${f[19]}" ]]; then
+        result_input="${f[5]}"
+        result_output="${f[6]}"
+      else
+        result_input=$((result_input + ${f[5]:-0}))
+        result_output=$((result_output + ${f[6]:-0}))
+      fi
       if [[ "${f[9]}" == 1 ]]; then
         result_seen=1
         status="error"
@@ -1515,10 +1635,14 @@ process_stream_line() {
       ;;
   esac
 
-  # Token counts: under .message for assistant events, top-level for result
-  if [[ "${f[0]}" == assistant || "${f[0]}" == result ]]; then
+  # Token counts: of its message for an assistant event, of the run so far for a
+  # result
+  if [[ "${f[0]}" == assistant ]]; then
     if [[ -n "${f[5]}" ]]; then input_tokens="${f[5]}"; fi
     if [[ -n "${f[6]}" ]]; then output_tokens="${f[6]}"; fi
+  elif [[ "${f[0]}" == result && ( -n "${f[5]}" || -n "${f[6]}" ) ]]; then
+    input_tokens="$result_input"
+    output_tokens="$result_output"
   fi
   return 0
 }
@@ -1529,7 +1653,7 @@ process_stream_line() {
 # shell variable; otherwise ask the terminal).
 run_pager() {
   local cols="${COLUMNS:-}" size
-  if [[ -z "$cols" ]] && size=$(stty size < /dev/tty 2> /dev/null); then
+  if [[ -z "$cols" ]] && size=$(stty size 2> /dev/null < /dev/tty); then
     cols="${size#* }"
   fi
   if [[ -n "$cols" ]]; then
@@ -1797,7 +1921,24 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
   [inputs | fromjson? | objects] as $events
   | ($events | map(select(.type == "system" and .subtype == "init")) | first) as $init
   | ($events | map(select(.type == "system")) | first) as $sys
-  | ($events | map(select(.type == "result")) | last) as $res
+  | ($events | map(select(.type == "result"))) as $results
+  | ($results | last) as $res
+  # With several results (a background agent) the last can be empty. modelUsage has
+  # the whole run; without it, add them up. Duration is per result, API time and
+  # cost are cumulative.
+  | ($res.modelUsage // {} | [.[]]) as $models
+  | (def sum(f): [$results[] | f | numbers] | if length > 0 then add else null end;
+     if ($models | length) > 0 then
+       {input_tokens: ($models | map(.inputTokens // 0) | add),
+        output_tokens: ($models | map(.outputTokens // 0) | add),
+        cache_creation_input_tokens: ($models | map(.cacheCreationInputTokens // 0) | add),
+        cache_read_input_tokens: ($models | map(.cacheReadInputTokens // 0) | add)}
+     else
+       {input_tokens: sum(.usage.input_tokens),
+        output_tokens: sum(.usage.output_tokens),
+        cache_creation_input_tokens: sum(.usage.cache_creation_input_tokens),
+        cache_read_input_tokens: sum(.usage.cache_read_input_tokens)}
+     end) as $usage
   | ($prev | first) as $p
   # What was shown: every message, as process_stream_line joins them (a
   # blank line where the message id changes). The result event repeats only
@@ -1816,20 +1957,16 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
       model_option: (if $model_option == "" then null else $model_option end),
       claude_args: (if ($claude_args | length) == 0 then null else $claude_args end),
       effort: (if $effort == "" then null else $effort end),
-      answer: (if $shown != "" then $shown else ($res.result // null) end),
+      answer: (if $shown != "" then $shown
+               else ([$results[].result | strings | select(. != "")] | last) end),
       is_error: ($res.is_error // false),
       thinking: ([$events[] | select(.type == "assistant") | .message.content[]?
                   | select(.type == "thinking") | .thinking]
                  | if length > 0 then join("\n") else null end),
       cost_usd: ($res.total_cost_usd // null),
-      duration_ms: ($res.duration_ms // null),
-      duration_api_ms: ($res.duration_api_ms // null),
-      usage: {
-        input_tokens: ($res.usage.input_tokens // null),
-        output_tokens: ($res.usage.output_tokens // null),
-        cache_creation_input_tokens: ($res.usage.cache_creation_input_tokens // null),
-        cache_read_input_tokens: ($res.usage.cache_read_input_tokens // null)
-      },
+      duration_ms: ([$results[].duration_ms | numbers] | if length > 0 then add else null end),
+      duration_api_ms: ([$results[].duration_api_ms | numbers] | max),
+      usage: $usage,
       timestamp: (now | todate)
     } as $turn
   # Parenthesized: jq 1.7 binds "as" tighter than "+" (1.8 does not)
@@ -2677,6 +2814,7 @@ emit_text() {
 # index: down one, scrolling at the bottom, in the same column, unlike \n),
 # so nothing scrolls between saving the cursor and restoring it.
 update_status_bar() {
+  ((CURSOR_MOVES)) || return 0
   local bar_text info_text bar_rows info_rows rows i out=""
   render_status_bar_fitted bar_text "$@"
   render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking" "${CONV_INFO:-}" "${current_tool:-${background_tasks:+agent: $background_tasks}}"
@@ -2696,9 +2834,9 @@ finalize_status_bar() {
   # Clear from cursor to end of screen, and print the final status bar and
   # info line 2 lines below content (stdout's answer gets just its newline)
   if ((OUT_TTY)); then
-    printf '\e[J\n\n%s\n%s\n' "$bar_text" "$info_text"
+    printf '%s\n\n%s\n%s\n' "$CLEAR_BELOW" "$bar_text" "$info_text"
   else
-    printf '\e[J%s\n%s\n' "$bar_text" "$info_text" >&"$BAR_FD"
+    printf '%s%s\n%s\n' "$CLEAR_BELOW" "$bar_text" "$info_text" >&"$BAR_FD"
     if [[ -n "$answer_text" && "$STREAM_OUTPUT" -eq 1 ]]; then printf '\n'; fi
   fi
   STATUS_BAR_VISIBLE=0
@@ -2756,7 +2894,7 @@ show_final_status_bar() {
 print_batch_answer() {
   [[ "$STREAM_OUTPUT" -eq 0 && -n "$answer_text" ]] || return 0
   # Clear the status bar area (was showing progress only)
-  printf '\e[J' >&"$BAR_FD"
+  printf '%s' "$CLEAR_BELOW" >&"$BAR_FD"
   STATUS_BAR_VISIBLE=0
   if [[ "$USE_PAGER" -eq 1 ]]; then
     printf '%s' "$answer_text" | run_pager
@@ -2784,7 +2922,7 @@ cleanup() {
   if [[ "${STATUS_BAR_VISIBLE:-0}" -eq 1 ]]; then
     printf '\e[J' >&"$BAR_FD"
   fi
-  printf '\e[?25h' >&"$BAR_FD" # ensure cursor visible
+  if ((CURSOR_MOVES)); then printf '\e[?25h' >&"$BAR_FD"; fi # ensure cursor visible
   if [[ -n "$CLAUDE_PID" ]]; then kill "$CLAUDE_PID" 2> /dev/null || true; fi
   stop_stream_jq
   # The intr key, if the chat prompt had it undefined
@@ -3009,7 +3147,10 @@ ask_once() {
   # The question goes in on stdin, so one starting with "-" is never read as
   # an option (and it stays out of the process list).
   debug_log "asking: resume=${CONV_SESSION_ID:-none} effort=${EFFORT:-default} model=${MODEL:-default} question_len=${#q}"
-  exec {CLAUDE_FD}< <("$CLAUDE_BIN" "${claude_args[@]}" <<< "$q" 2> "$CLAUDE_STDERR")
+  exec {CLAUDE_FD}< <(
+    restore_locale
+    "$CLAUDE_BIN" "${claude_args[@]}" <<< "$q" 2> "$CLAUDE_STDERR"
+  )
   CLAUDE_PID=$!
 
   # A Ctrl-C interrupts the read; on_interrupt has already stopped claude
@@ -3029,7 +3170,7 @@ ask_once() {
 
   # An interrupted answer is not saved: claude sent no result for it
   if ((TURN_INTERRUPTED)); then
-    printf '\e[J\n%s(interrupted)%s\n' "$FG_DIM" "$RST" >&"$BAR_FD"
+    printf '%s\n%s(interrupted)%s\n' "$CLEAR_BELOW" "$FG_DIM" "$RST" >&"$BAR_FD"
     STATUS_BAR_VISIBLE=0
     return 130
   fi
@@ -3158,15 +3299,18 @@ launch_in_tmux() {
   esac
 
   envfile=$(mktemp "${run_dir_base}/claude-ask-env.XXXXXX")
-  while IFS= read -r var; do
-    case "$var" in
-      TMUX | TMUX_PANE | TERM | COLUMNS | LINES | PWD | OLDPWD | SHLVL | _) ;;
-      *)
-        # What bash holds readonly (SHELLOPTS, BASHOPTS) cannot be set there
-        if [[ "${!var@a}" != *r* ]]; then printf 'export %s=%q\n' "$var" "${!var}"; fi
-        ;;
-    esac
-  done < <(compgen -e) > "$envfile"
+  (
+    restore_locale
+    while IFS= read -r var; do
+      case "$var" in
+        TMUX | TMUX_PANE | TERM | COLUMNS | LINES | PWD | OLDPWD | SHLVL | _) ;;
+        *)
+          # What bash holds readonly (SHELLOPTS, BASHOPTS) cannot be set there
+          if [[ "${!var@a}" != *r* ]]; then printf 'export %s=%q\n' "$var" "${!var}"; fi
+          ;;
+      esac
+    done < <(compgen -e)
+  ) > "$envfile"
   envs=("_CLAUDE_ASK_ENV_FILE=$envfile")
   if [[ -n "$question" ]]; then
     qfile=$(mktemp "${run_dir_base}/claude-ask-question.XXXXXX")

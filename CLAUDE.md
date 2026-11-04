@@ -32,7 +32,9 @@ through a pager with a themed status bar redrawn just below the streamed text
   the renderer's empty rows off both ends. To check it, compare with the whole answer
   rendered at once using the real `nvcat`, not a stub.
   Tests set `CLAUDE_ASK_PAGER=cat`.
-- **Terminal or not**: `OUT_TTY` is whether stdout is a terminal
+- **Locale**: the script keeps `LC_NUMERIC=C` for itself; `restore_locale` undoes it
+  for the `claude` process and the tmux environment file.
+- **Terminal or not**: `CURSOR_MOVES` is 0 for a dumb terminal (no redraws). `OUT_TTY` is whether stdout is a terminal
   (`CLAUDE_ASK_FORCE_TTY` for tests; `common_setup` sets it and `exec < /dev/null`).
   Bars, notes and cursor moves go to `BAR_FD`: stdout, else stderr if a terminal,
   else `/dev/null`. Without `OUT_TTY`, stdout gets only the answer.
@@ -119,6 +121,10 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Background agents**: `background_tasks_changed` gives `background_tasks`, shown
   on the info line after any running tool; a `result` while it is set does not
   mean done (`result_seen` covers a stream that ends anyway).
+- **Several results**: a run with a background agent has several. Cost and API time
+  are cumulative; durations are per result, so they add; tokens come from the last
+  `modelUsage` (the whole run, with subagents), or add up without one. Both in
+  `process_stream_line` and `SESSION_JQ`.
 - **Subagents**: events carrying `parent_tool_use_id` (field 17) add no answer text,
   here and in `SESSION_JQ`; their tools still show. A background agent means
   several `result`s in a run, with a new `init` before more answer, which sets
@@ -194,5 +200,6 @@ through a pager with a themed status bar redrawn just below the streamed text
 
 ## Versioning
 
-`VERSION` holds the version; each release gets an annotated tag `vX.Y.Z` and
-a `CHANGELOG.md` entry.
+`VERSION` holds the version, and `CLAUDE_ASK_VERSION` in the script must match it
+(a test checks); each release gets an annotated tag `vX.Y.Z` and a `CHANGELOG.md`
+entry.
