@@ -93,11 +93,12 @@ and `--effort` and `--model` have their own options.
 ## Streaming
 
 With `--no-pager`, or when stdout is a file or pipe, text appears word by word.
-With a pager, each finished block (a paragraph, a list, a whole code block) is
+With a pager, each finished block (a paragraph, a whole list, a whole code block) is
 rendered as it completes, since `nvcat` prints nothing until its input ends, so a
-long code block appears when it closes. Blocks are rendered one at a time, so
-spacing between them can differ a little from `--no-stream`, which renders the
-whole answer at the end.
+long list or code block appears when it closes. Blocks that finish while the
+renderer is still busy go through together, so text can come in bursts when it
+arrives quickly (`CLAUDE_ASK_RENDER_EVERY`, in milliseconds, sets the time between
+runs).
 
 ## Pipes and files
 

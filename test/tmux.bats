@@ -199,3 +199,34 @@ launch_call() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"P: The capital of France"* ]]
 }
+
+@test "an exported SHELLOPTS or BASHOPTS does not stop the new run" {
+  export CLAUDE_STUB_TMUX_RUN=1 CLAUDE_ASK_POPUP_PAGER=cat
+  run bash -c 'export SHELLOPTS BASHOPTS; "$1" --popup --no-pager "q"' bash "$SCRIPT_PATH"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"capital of France"* ]]
+  [[ "$output" != *"readonly"* ]]
+  [ -z "$(ls "$XDG_RUNTIME_DIR" | grep claude-ask-env)" ]
+}
+
+@test "the environment file leaves out what bash holds readonly" {
+  run bash -c 'export SHELLOPTS BASHOPTS OTHER=kept; "$1" --split "q"' bash "$SCRIPT_PATH"
+  local envfile
+  envfile=$(launch_call | grep -o "_CLAUDE_ASK_ENV_FILE=[^' ]*" | cut -d= -f2)
+  grep -q '^export OTHER=kept$' "$envfile"
+  ! grep -qE '^export (SHELLOPTS|BASHOPTS)=' "$envfile"
+}
+
+@test "a line the environment file cannot set does not stop the run" {
+  printf 'export SHELLOPTS=x\nexport AFTER=reached\n' > "$TEST_TEMP_DIR/envf"
+  cat > "$TEST_TEMP_DIR/show" <<STUB
+#!/bin/bash
+printf '%s' "\$AFTER" > "$TEST_TEMP_DIR/seen"
+cat "$FIXTURES_DIR/full_session.jsonl"
+STUB
+  chmod +x "$TEST_TEMP_DIR/show"
+  CLAUDE_ASK_BIN="$TEST_TEMP_DIR/show" run env _CLAUDE_ASK_ENV_FILE="$TEST_TEMP_DIR/envf" "$SCRIPT_PATH" --no-pager "q"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_TEMP_DIR/seen")" = "reached" ]
+  [ ! -e "$TEST_TEMP_DIR/envf" ]
+}

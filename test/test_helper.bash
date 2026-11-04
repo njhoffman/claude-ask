@@ -25,6 +25,8 @@ common_setup() {
   export CLAUDE_ASK_DEMO_DELAY=0
   # A wide terminal, so no test depends on the width of the one running it
   export CLAUDE_ASK_COLUMNS=200
+  # Each finished block through the pager at once, whatever the timing
+  export CLAUDE_ASK_RENDER_EVERY=0
   # Tests capture stdout but look at the bar too; a real stdin could be a pipe
   # that never ends, which a question would wait on
   export CLAUDE_ASK_FORCE_TTY=1

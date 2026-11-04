@@ -341,8 +341,10 @@ help_in_pty() {
   [ "$status" -eq 0 ]
   [[ "$output" == *$'\e[1;33mOptions'* ]]
   [[ "$output" == *$'\e[1;33mExamples:'* ]]
-  [[ "$output" == *$'\e[36m--theme THEME\e[0m'* ]]
-  [[ "$output" == *$'\e[36m-e, --effort LEVEL\e[0m Effort'* ]]
+  [[ "$output" == *$'\e[36m--theme THEME\e[0m '* ]]
+  [[ "$output" == *$'\e[36m-e, --effort LEVEL\e[0m '* ]]
+  # Only the option: not the first capital of what describes it
+  [[ "$output" == *$'\e[36m--debug-log[=FILE]\e[0m'*' Write debug'* ]]
   [[ "$output" == *$'\e[36m--split[=h|v]\e[0m'* ]]
   [[ "$output" == *$'\e[36m--resume=ID|N\e[0m'* ]]
   [[ "$output" == *$'\e[36m--session [ID|N]\e[0m'* ]]
@@ -363,4 +365,28 @@ help_in_pty() {
   [[ "$output" != *$'\e['* ]]
   TERM=dumb help_in_pty
   [[ "$output" != *$'\e['* ]]
+}
+
+@test "--help lines up its columns, one line for each thing" {
+  local help
+  help=$("$SCRIPT_PATH" --help)
+  # Options: where the description starts is the same on every line
+  [ "$(sed -n '/^Options/,/^Examples:/p' <<< "$help" | grep -cE '^ +-')" -gt 20 ]
+  sed -n '/^Options/,/^Examples:/p' <<< "$help" | grep -E '^ +-' | python3 -c '
+import re, sys
+starts = {re.search(r"\S  +(\S)", l).start(1) for l in sys.stdin}
+assert len(starts) == 1, starts'
+  sed -n '/^Environment:/,$p' <<< "$help" | tail -n +2 | python3 -c '
+import re, sys
+starts = {re.search(r"\S  +(\S)", l).start(1) for l in sys.stdin}
+assert len(starts) == 1, starts'
+  sed -n '/^Examples:/,/^Environment:/p' <<< "$help" | grep '  # ' | python3 -c '
+import sys
+starts = {l.index("  # ") for l in sys.stdin}
+assert len(starts) == 1, starts'
+  # Long options under the long ones, and no continuation lines anywhere
+  [[ "$help" == *$'\n      --popup '* ]]
+  [[ "$help" == *$'\n  -i, --interactive '* ]]
+  ! sed -n '/^Options/,/^Examples:/p' <<< "$help" | grep -E '^ +[^ -]'
+  ! sed -n '/^Environment:/,$p' <<< "$help" | grep -E '^   '
 }

@@ -35,10 +35,10 @@ session() {
 }
 
 # The options --help lists in its Options section: the start of each line
-# that begins with one ("-e, --effort LEVEL Effort ..." gives -e, --effort)
+# ("-e, --effort LEVEL  Effort ..." gives -e, --effort)
 help_options() {
-  "$SCRIPT_PATH" --help | sed -n '/^Options/,/^Examples:/p' | grep -E '^  -' |
-    grep -oE '^  -[^ ]*(, --?[^ ]*)?' | grep -oE -- '--?[a-zA-Z][a-zA-Z-]*' | sort -u
+  "$SCRIPT_PATH" --help | sed -n '/^Options/,/^Examples:/p' | grep -E '^ +-' |
+    grep -oE '^ +-[^ ]*(, --?[^ ]*)?' | grep -oE -- '--?[a-zA-Z][a-zA-Z-]*' | sort -u
 }
 
 @test "bash: options complete from -" {

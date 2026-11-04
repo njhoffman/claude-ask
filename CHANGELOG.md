@@ -6,6 +6,20 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-11-03
+
+### Fixed
+
+- Text rendered while streaming matches the whole answer rendered at once: a table
+  keeps its top border and no longer gets blank rows after it, and a list stays
+  together through its blank lines, keeping the indent of code in it and its nesting.
+- Many short paragraphs no longer lag behind the answer: after a pager run, blocks
+  that finish meanwhile wait up to twice its time and go through together (40
+  paragraphs arriving at once: 9.2s before, 0.5s now, with `nvcat`).
+- `--split` and `--popup` work with `SHELLOPTS` or `BASHOPTS` exported.
+- `--help` lines up its columns, gives each option one line, and no longer colors the
+  first letter of a description.
+
 ## [0.15.1] - 2026-11-03
 
 ### Fixed

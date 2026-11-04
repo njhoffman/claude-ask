@@ -23,9 +23,14 @@ through a pager with a themed status bar redrawn just below the streamed text
   `bash -c`) or `--no-pager`. `run_pager` passes `COLUMNS`, since a pager
   writing to a pipe cannot ask the terminal for its width. A renderer may print
   nothing until its input ends (nvcat does, and takes 200-300ms a run), so
-  while streaming `write_chunk` splits the text into blocks (a blank line, or
-  a whole code block) and `render_block` runs the pager on each;
-  `render_flush` at `content_block_stop` and at the end shows the rest.
+  while streaming `write_chunk` and `render_line` split the text into blocks (a blank
+  line, a whole code block, a whole list) and `render_ready` runs the pager on what
+  is finished, waiting twice the last run's time between runs
+  (`CLAUDE_ASK_RENDER_EVERY`; `common_setup` sets 0 so each block goes alone);
+  `render_flush` at `content_block_stop` and at the end shows the rest. A block
+  starting with a table gets a line above it, for its border; `trim_blank_ends` takes
+  the renderer's empty rows off both ends. To check it, compare with the whole answer
+  rendered at once using the real `nvcat`, not a stub.
   Tests set `CLAUDE_ASK_PAGER=cat`.
 - **Terminal or not**: `OUT_TTY` is whether stdout is a terminal
   (`CLAUDE_ASK_FORCE_TTY` for tests; `common_setup` sets it and `exec < /dev/null`).
@@ -86,7 +91,7 @@ through a pager with a themed status bar redrawn just below the streamed text
   `display-popup`, passing options, as one command (`shell_command`: tmux 3.2's
   popup has no `-e` and takes one word, and it runs in the user's shell). tmux uses the server's environment, so all
   that is exported goes in a private file, `_CLAUDE_ASK_ENV_FILE`, which the very
-  top of the script sources and deletes; nothing secret goes on tmux's command
+  top of the script sources and deletes (readonly variables stay out of it); nothing secret goes on tmux's command
   line. The question goes in `_CLAUDE_ASK_QUESTION_TMP` (read and deleted), a
   popup's paging in `_CLAUDE_ASK_PAGE_AFTER`. `display-popup -E` returns the popup
   run's status, so a nonzero status with the environment file gone is passed on,

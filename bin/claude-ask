@@ -4,110 +4,78 @@
 #
 # Usage: claude-ask [OPTIONS] ["question"]
 #
-# With no question (and a terminal on stdin) it opens a chat: each answer is
-# followed by a "> " prompt for the next question in the same conversation.
-# At the prompt, \e composes the question in $EDITOR; /effort [LEVEL] and
-# /model [NAME] show or change the effort level and model for the next
-# questions ("default" clears them); /yank [code [N]] copies the last answer
-# or its code blocks; /help lists the rest, and Tab completes them; exit,
-# quit or Ctrl-D ends the chat; Ctrl-C stops the current answer (at the
-# prompt, it clears the line). Piped input is read as the question, or added
-# after the one given; with -i the chat then goes on at the terminal. When
-# stdout is not a terminal it gets only the answer.
+# With no question (and a terminal on stdin) it opens a chat: each answer is followed by a "> " prompt for the next question in the same conversation. At the prompt, \e composes the question in $EDITOR; /effort [LEVEL] and /model [NAME] show or change the effort level and model for the next questions ("default" clears them); /yank [code [N]] copies the last answer or its code blocks; /help lists the rest, and Tab completes them; exit, quit or Ctrl-D ends the chat; Ctrl-C stops the current answer (at the prompt, it clears the line). Piped input is read as the question, or added after the one given; with -i the chat then goes on at the terminal. When stdout is not a terminal it gets only the answer.
 #
 # Options (values also as --option=VALUE, short flags can be bundled: -ir):
-#   -i, --interactive  Keep the chat open after answering the question
-#   -r, --resume       Continue the most recent saved session (with a
-#                      question: ask it there; without: chat there); it keeps
-#                      the session's effort and model unless -e or -m is given
-#   --resume=ID|N      The same for the session that ID or N names (as for
-#                      --session: a --history number, a name or a prefix)
-#   -e, --effort LEVEL Effort (thinking) level: low, medium, high, xhigh, max
-#                      (default: claude's own, from its settings)
-#   -m, --model MODEL  Model alias (opus, sonnet, haiku, fable) or full name
-#   -y, --yank         Copy the answer to the clipboard (and a tmux buffer);
-#                      with no question, copy the last answer of the newest
-#                      session (or of --session ID|N) and exit
-#   -Y, --yank-code[=N]  The same for the answer's code blocks (only the Nth)
-#   --split[=h|v]      Run in a new tmux pane, side by side (h) or one above
-#                      the other (v), chosen from the pane's shape by default.
-#                      With a question the answer goes there (and it stays as
-#                      a chat) while you stay here; without, you chat there.
-#   --popup            Run in a tmux popup: a question's answer is paged and
-#                      quitting the pager closes it; without one, a chat
-#                      until /quit
-#   --theme THEME      Status bar theme: minimal, bubbles, powerline (default: minimal)
-#   --pager CMD        Pager command for markdown output, run with bash -c
-#                      (default: nvcat --pager less; plain text if nvcat is missing)
-#   --no-pager         Disable pager, output raw text
-#   --demo-themes       Show example status bars for all themes and exit
-#   --demo-output       Simulate streaming with mock responses (small/medium/large) and exit
-#   --no-stream        Don't stream output; show status bar only, render markdown when complete
-#   --save-raw         Also save the raw JSON stream, as NAME.jsonl beside NAME.json
-#   --history[=N]      List saved sessions (only the newest N)
-#   --search TEXT      List the sessions with TEXT in a question or an answer,
-#                      any case, with their --history numbers
-#   --delete ID|N      Delete a saved session, asking first
-#   --prune AGE        Delete sessions older than AGE (30d, 8w, 12h; a plain
-#                      number is days), asking first
-#   --force            Do not ask; without a terminal, needed to delete at all
-#   --claude-arg WORD  One more word for claude's command line (repeat for each,
-#                      so --claude-arg --add-dir --claude-arg ../src); -r keeps
-#                      them and says which
-#   --session [ID|N]   View a saved session by name/id or index number
-#   --debug-log[=FILE] Write debug messages to FILE
-#                      (default: ${XDG_STATE_HOME:-~/.local/state}/claude-ask/debug.log)
-#   --completions SHELL  Print the completion script for bash, zsh or fish:
-#                      eval "$(claude-ask --completions bash)",
-#                      source <(claude-ask --completions zsh),
-#                      claude-ask --completions fish | source
-#   --version          Print the version and exit
-#   -h, --help         Show this help message
+#   -i, --interactive        Keep the chat open after answering the question
+#   -r, --resume             Continue the most recent saved session (with a question: ask it there; without: chat there); it keeps the session's effort and model unless -e or -m is given
+#       --resume=ID|N        The same for the session that ID or N names (as for --session: a --history number, a name or a prefix)
+#   -e, --effort LEVEL       Effort (thinking) level: low, medium, high, xhigh, max (default: claude's own, from its settings)
+#   -m, --model MODEL        Model alias (opus, sonnet, haiku, fable) or full name
+#   -y, --yank               Copy the answer to the clipboard (and a tmux buffer); with no question, copy the last answer of the newest session (or of --session ID|N) and exit
+#   -Y, --yank-code[=N]      The same for the answer's code blocks (only the Nth)
+#       --split[=h|v]        Run in a new tmux pane, side by side (h) or one above the other (v), chosen from the pane's shape by default. With a question the answer goes there (and it stays as a chat) while you stay here; without, you chat there.
+#       --popup              Run in a tmux popup: a question's answer is paged and quitting the pager closes it; without one, a chat until /quit
+#       --theme THEME        Status bar theme: minimal, bubbles, powerline (default: minimal)
+#       --pager CMD          Pager command for markdown output, run with bash -c (default: nvcat --pager less; plain text if nvcat is missing)
+#       --no-pager           Disable pager, output raw text
+#       --demo-themes        Show example status bars for all themes and exit
+#       --demo-output        Simulate streaming with mock responses (small/medium/large) and exit
+#       --no-stream          Don't stream output; show status bar only, render markdown when complete
+#       --save-raw           Also save the raw JSON stream, as NAME.jsonl beside NAME.json
+#       --history[=N]        List saved sessions (only the newest N)
+#       --search TEXT        List the sessions with TEXT in a question or an answer, any case, with their --history numbers
+#       --delete ID|N        Delete a saved session, asking first
+#       --prune AGE          Delete sessions older than AGE (30d, 8w, 12h; a plain number is days), asking first
+#       --force              Do not ask; without a terminal, needed to delete at all
+#       --claude-arg WORD    One more word for claude's command line (repeat for each, so --claude-arg --add-dir --claude-arg ../src); -r keeps them and says which
+#       --session [ID|N]     View a saved session by name/id or index number
+#       --debug-log[=FILE]   Write debug messages to FILE (default: ${XDG_STATE_HOME:-~/.local/state}/claude-ask/debug.log)
+#       --completions SHELL  Print the completion script for bash, zsh or fish: eval "$(claude-ask --completions bash)", source <(claude-ask --completions zsh), claude-ask --completions fish | source
+#       --version            Print the version and exit
+#   -h, --help               Show this help message
 #
 # Examples:
-#   claude-ask                                    # start a chat
+#   claude-ask                                        # start a chat
 #   claude-ask "What is the capital of France?"
-#   claude-ask -i "Explain git rebase"            # answer, then keep chatting
-#   claude-ask -r "And with --onto?"              # follow up in the last session
-#   claude-ask -r                                 # continue the last session as a chat
-#   claude-ask --resume=3                         # chat in the third newest session
+#   claude-ask -i "Explain git rebase"                # answer, then keep chatting
+#   claude-ask -r "And with --onto?"                  # follow up in the last session
+#   claude-ask -r                                     # continue the last session as a chat
+#   claude-ask --resume=3                             # chat in the third newest session
 #   claude-ask -e high -m sonnet "Review this design"
 #   claude-ask -Y "A bash loop over lines of a file"  # copy the code
-#   claude-ask -y                                 # copy the last answer
-#   claude-ask --split "Explain this error"        # answer in a new pane
-#   claude-ask --popup                            # chat in a tmux popup
-#   git diff | claude-ask                         # piped input is the question
-#   git diff | claude-ask "Review this"           # or follows the question
-#   claude-ask "List 3 colors" > colors.txt       # just the answer, no bar in it
+#   claude-ask -y                                     # copy the last answer
+#   claude-ask --split "Explain this error"           # answer in a new pane
+#   claude-ask --popup                                # chat in a tmux popup
+#   git diff | claude-ask                             # piped input is the question
+#   git diff | claude-ask "Review this"               # or follows the question
+#   claude-ask "List 3 colors" > colors.txt           # just the answer, no bar in it
 #   claude-ask --theme powerline "Explain git rebase"
 #   claude-ask --demo-themes
 #   claude-ask --no-pager "List common bash shortcuts"
-#   claude-ask --history                          # list saved sessions
-#   claude-ask --session 1                        # view most recent session
-#   claude-ask --session git-bare                 # view session by name
-#   claude-ask --debug-log "What is 2+2?"         # enable debug logging
+#   claude-ask --history                              # list saved sessions
+#   claude-ask --session 1                            # view most recent session
+#   claude-ask --session git-bare                     # view session by name
+#   claude-ask --debug-log "What is 2+2?"             # enable debug logging
 #
 # Environment:
-#   SESSION_DIR        Where sessions are saved
-#                      (default: ${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions)
-#   VISUAL, EDITOR     The editor for \e, with any arguments (default: vi)
-#   CLAUDE_ASK_BIN     The claude command to run (default: claude)
-#   CLAUDE_ASK_PAGER   The default pager command (default: nvcat --pager less)
-#   CLAUDE_ASK_EFFORT  The default effort level (-e overrides it)
-#   CLAUDE_ASK_MODEL   The default model (-m overrides it)
-#   CLAUDE_ASK_DEMO_DELAY  Seconds between demo frames (default: 0.08 themes, 0.03 output)
+#   SESSION_DIR                   Where sessions are saved (default: ${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions)
+#   VISUAL, EDITOR                The editor for \e, with any arguments (default: vi)
+#   CLAUDE_ASK_BIN                The claude command to run (default: claude)
+#   CLAUDE_ASK_PAGER              The default pager command (default: nvcat --pager less)
+#   CLAUDE_ASK_EFFORT             The default effort level (-e overrides it)
+#   CLAUDE_ASK_MODEL              The default model (-m overrides it)
+#   CLAUDE_ASK_DEMO_DELAY         Seconds between demo frames (default: 0.08 themes, 0.03 output)
 #   CLAUDE_ASK_FORCE_INTERACTIVE  Chat even when stdin is not a terminal (tests)
-#   CLAUDE_ASK_FORCE_TTY  Draw as if stdout were a terminal (tests)
-#   NO_COLOR           When set and not empty, no colors
-#   CLAUDE_ASK_COLORS  truecolor, 256, 16 or none (default: from COLORTERM and TERM)
-#   CLAUDE_ASK_ARGS    Words for claude's command line, quoted as in a shell
-#   CLAUDE_ASK_COLUMNS  The terminal width the status bar is fitted to
-#                      (default: the terminal's own)
-#   CLAUDE_ASK_CLIPBOARD  Command that copies stdin, run with bash -c
-#                      (default: wl-copy, xclip, xsel or pbcopy)
-#   CLAUDE_ASK_POPUP_SIZE  --popup's size, WIDTH or WIDTHxHEIGHT (default: 80%)
-#   CLAUDE_ASK_POPUP_PAGER  Pager for the answer in --popup (default: less -R -+F)
-
+#   CLAUDE_ASK_FORCE_TTY          Draw as if stdout were a terminal (tests)
+#   CLAUDE_ASK_RENDER_EVERY       Milliseconds between pager runs while streaming (default: twice the time the last run took)
+#   NO_COLOR                      When set and not empty, no colors
+#   CLAUDE_ASK_COLORS             truecolor, 256, 16 or none (default: from COLORTERM and TERM)
+#   CLAUDE_ASK_ARGS               Words for claude's command line, quoted as in a shell
+#   CLAUDE_ASK_COLUMNS            The terminal width the status bar is fitted to (default: the terminal's own)
+#   CLAUDE_ASK_CLIPBOARD          Command that copies stdin, run with bash -c (default: wl-copy, xclip, xsel or pbcopy)
+#   CLAUDE_ASK_POPUP_SIZE         --popup's size, WIDTH or WIDTHxHEIGHT (default: 80%)
+#   CLAUDE_ASK_POPUP_PAGER        Pager for the answer in --popup (default: less -R -+F)
 set -euo pipefail
 
 # First, before anything bash 3.2 (macOS's own) would stumble on: mapfile,
@@ -126,7 +94,8 @@ require_bash "${BASH_VERSINFO[0]}"
 if [[ -n "${_CLAUDE_ASK_ENV_FILE:-}" ]]; then
   if [[ -O "$_CLAUDE_ASK_ENV_FILE" ]]; then
     # shellcheck disable=SC1090 # written by launch_in_tmux
-    source "$_CLAUDE_ASK_ENV_FILE"
+    # Not a reason to give up if one variable cannot be set
+    source "$_CLAUDE_ASK_ENV_FILE" 2> /dev/null || true
     rm -f "$_CLAUDE_ASK_ENV_FILE"
   fi
   unset _CLAUDE_ASK_ENV_FILE
@@ -231,11 +200,11 @@ usage() {
   head=$'\e[1;33m' opt=$'\e[36m' env=$'\e[32m' dim=$'\e[2m' off=$'\e[0m'
   # The headings last: the ranges below look for them without their color
   printf '%s\n' "$text" | sed -E \
-    -e "/^Options/,/^Examples/s~^  ((-[a-zA-Z], )?--?[a-zA-Z][a-zA-Z-]*(\\[=[^]]*\\]|=[^ ]*)?( \\[?[A-Z][A-Z|]*\\]?)?)~  $opt\\1$off~" \
-    -e "/^Examples/,/^Environment/s~(  +# .*)\$~$dim\\1$off~" \
-    -e "/^Environment/,\$s~^  ([A-Z][A-Z_, ]*[A-Z_])  ~  $env\\1$off  ~" \
-    -e "s~^(Usage:)~$head\\1$off~" \
-    -e "s~^((Options|Examples|Environment).*:)\$~$head\\1$off~"
+    -e "/^Options/,/^Examples/s~^( +)(-([^ ]| [^ ])*)~\1$opt\2$off~" \
+    -e "/^Examples/,/^Environment/s~(  +# .*)\$~$dim\1$off~" \
+    -e "/^Environment/,\$s~^  ([A-Z]([^ ]| [^ ])*)~  $env\1$off~" \
+    -e "s~^(Usage:)~$head\1$off~" \
+    -e "s~^((Options|Examples|Environment).*:)\$~$head\1$off~"
   exit 0
 }
 
@@ -1306,7 +1275,11 @@ reset_stream_state() {
   RENDER_PENDING="" # with a pager: text not yet a whole line
   RENDER_BLOCK=""   # lines of the block being gathered
   RENDER_FENCE=""   # the fence of the code block it is in
-  RENDER_SHOWN=0    # a block has been shown
+  RENDER_IN_LIST=0  # it has a list item, so a blank line may not end it
+  RENDER_BLANK=0    # a blank line in a list, waiting on the next line
+  RENDER_READY=""   # finished blocks, waiting to go through the pager
+  RENDER_NEXT=0     # when they can
+  RENDER_SHOWN=0    # something has been shown
   result_text="" # the result event's text: the last message, or the error
   status="running" # running, done or error
   stream_error=""
@@ -2756,7 +2729,7 @@ refresh_status_bar() {
 LAST_BAR_REDRAW=0
 show_stream_event() {
   if [[ -n "$CHUNK" && "$STREAM_OUTPUT" -eq 1 ]]; then write_chunk "$CHUNK"; fi
-  if ((BLOCK_ENDED)); then render_flush; fi
+  if ((BLOCK_ENDED)); then render_flush; elif [[ "$USE_PAGER" -eq 1 ]]; then render_ready; fi
   local now="${EPOCHREALTIME/[.,]/}"
   if ((REDRAW_MAY_WAIT && now - LAST_BAR_REDRAW < 100000)) && [[ "$CHUNK" != *$'\n'* ]]; then
     return 0
@@ -2794,7 +2767,7 @@ print_batch_answer() {
 }
 
 # ---------------------------------------------------------------------------
-# Per-run private directory (FIFO, raw stream, claude's stderr) and cleanup
+# Per-run private directory (raw stream, claude's stderr) and cleanup
 # ---------------------------------------------------------------------------
 run_dir_base="${XDG_RUNTIME_DIR:-}"
 if [[ ! -d "$run_dir_base" || ! -w "$run_dir_base" ]]; then
@@ -2840,9 +2813,14 @@ trap read_term_cols WINCH
 
 # ---------------------------------------------------------------------------
 # Showing text as it arrives. With no pager, as it comes. A Markdown pager may
-# print nothing until its input ends (nvcat does), so with one each finished
-# block (up to a blank line, or a whole code block) goes through it on its own.
+# print nothing until its input ends (nvcat does), so with one the text goes
+# through it in finished blocks: up to a blank line, a whole code block, or a
+# whole list, which rendered apart would lose its indents and nesting.
+# Starting a renderer takes time (nvcat 200-300ms), so after a run taking D the
+# blocks finished meanwhile wait up to 2D and go through together.
 # ---------------------------------------------------------------------------
+LIST_ITEM_RE='^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]'
+
 write_chunk() {
   if [[ "$USE_PAGER" -ne 1 ]]; then
     emit_text "$1"
@@ -2853,45 +2831,123 @@ write_chunk() {
   while [[ "$RENDER_PENDING" == *$'\n'* ]]; do
     line="${RENDER_PENDING%%$'\n'*}"
     RENDER_PENDING="${RENDER_PENDING#*$'\n'}"
-    if [[ -n "$RENDER_FENCE" ]]; then
-      RENDER_BLOCK+="$line"$'\n'
-      if [[ "$line" =~ $FENCE_CLOSE_RE && "${BASH_REMATCH[1]:0:1}" == "${RENDER_FENCE:0:1}" && ${#BASH_REMATCH[1]} -ge ${#RENDER_FENCE} ]]; then
-        RENDER_FENCE=""
-      fi
-    elif [[ "$line" =~ $FENCE_OPEN_RE ]]; then
-      RENDER_FENCE="${BASH_REMATCH[1]}"
-      RENDER_BLOCK+="$line"$'\n'
-    elif [[ "$line" =~ ^[[:space:]]*$ ]]; then
-      render_block
-    else
-      RENDER_BLOCK+="$line"$'\n'
-    fi
+    render_line "$line"
   done
 }
 
-# Run the gathered block through the pager and show it, a blank line after the
-# last one. If the pager gives nothing back, the text itself is shown.
-render_block() {
-  local block="$RENDER_BLOCK" out=""
+# render_line LINE: one whole line of answer into the block being gathered
+render_line() {
+  local line="$1"
+  if [[ -n "$RENDER_FENCE" ]]; then
+    RENDER_BLOCK+="$line"$'\n'
+    if [[ "$line" =~ $FENCE_CLOSE_RE && "${BASH_REMATCH[1]:0:1}" == "${RENDER_FENCE:0:1}" && ${#BASH_REMATCH[1]} -ge ${#RENDER_FENCE} ]]; then
+      RENDER_FENCE=""
+    fi
+    return 0
+  fi
+  if [[ "$line" =~ ^[[:space:]]*$ ]]; then
+    # In a list the next line decides; anywhere else the block is finished
+    if ((RENDER_IN_LIST)); then
+      RENDER_BLANK=1
+    else
+      render_finish_block
+    fi
+    return 0
+  fi
+  if ((RENDER_BLANK)); then
+    RENDER_BLANK=0
+    if [[ "$line" == [[:space:]]* || "$line" =~ $LIST_ITEM_RE ]]; then
+      RENDER_BLOCK+=$'\n'
+    else
+      render_finish_block
+    fi
+  fi
+  if [[ "$line" =~ $LIST_ITEM_RE ]]; then RENDER_IN_LIST=1; fi
+  if [[ "$line" =~ $FENCE_OPEN_RE ]]; then RENDER_FENCE="${BASH_REMATCH[1]}"; fi
+  RENDER_BLOCK+="$line"$'\n'
+}
+
+# The gathered block is finished: it joins those ready to show
+render_finish_block() {
+  RENDER_IN_LIST=0
+  RENDER_BLANK=0
+  [[ "$RENDER_BLOCK" =~ [^[:space:]] ]] || {
+    RENDER_BLOCK=""
+    return 0
+  }
+  RENDER_READY+="${RENDER_READY:+$'\n'}$RENDER_BLOCK"
   RENDER_BLOCK=""
-  [[ "$block" =~ [^[:space:]] ]] || return 0
-  out=$(printf '%s' "$block" | run_pager 2> /dev/null) || true
-  if [[ -z "$out" ]]; then out="${block%$'\n'}"; fi
+  render_ready
+}
+
+# render_ready [force]: run the pager on the finished blocks and show them, if
+# it is time. CLAUDE_ASK_RENDER_EVERY (milliseconds) replaces the wait of twice
+# the last run. If the pager gives nothing back, the text itself is shown.
+render_ready() {
+  [[ -n "$RENDER_READY" ]] || return 0
+  local now="${EPOCHREALTIME/[.,]/}" out="" text="$RENDER_READY"
+  if [[ "${1:-}" != force ]] && ((now < RENDER_NEXT)); then return 0; fi
+  RENDER_READY=""
+  # A table at the very top loses its border in nvcat, which draws it in the row
+  # above. Only then, as a line-numbering pager would show the extra row.
+  if [[ "$text" == "|"* ]]; then text=$'\n'"$text"; fi
+  out=$(printf '%s' "$text" | run_pager 2> /dev/null) || true
+  trim_blank_ends out "$out"
+  if [[ -z "$out" ]]; then out="${text#$'\n'}"; out="${out%$'\n'}"; fi
   if ((RENDER_SHOWN)); then out=$'\n\n'"$out"; fi
   RENDER_SHOWN=1
   emit_text "$out"
+  local end="${EPOCHREALTIME/[.,]/}"
+  if [[ -n "${CLAUDE_ASK_RENDER_EVERY:-}" ]]; then
+    RENDER_NEXT=$((end + CLAUDE_ASK_RENDER_EVERY * 1000))
+  else
+    RENDER_NEXT=$((end + 2 * (end - now)))
+  fi
 }
 
-# A block of text ended, or the answer did: show what is gathered, even without
-# a blank line or a closing fence, so "Let me check." shows before a tool runs
+# trim_blank_ends OUT TEXT: TEXT without the lines at its start and end that show
+# nothing: empty, or only escape sequences (a renderer pads with them)
+trim_blank_ends() {
+  local _out="$1" _t="$2" _line
+  while [[ "$_t" == *$'\n'* ]]; do
+    _line="${_t%%$'\n'*}"
+    line_is_blank "$_line" || break
+    _t="${_t#*$'\n'}"
+  done
+  while [[ "$_t" == *$'\n'* ]]; do
+    _line="${_t##*$'\n'}"
+    line_is_blank "$_line" || break
+    _t="${_t%$'\n'*}"
+  done
+  if line_is_blank "$_t"; then _t=""; fi
+  printf -v "$_out" '%s' "$_t"
+}
+
+line_is_blank() {
+  local _s="$1" _pre _rest
+  while [[ "$_s" == *$'\e['* ]]; do
+    _pre="${_s%%$'\e['*}"
+    _rest="${_s#*$'\e['}"
+    _rest="${_rest#*[a-zA-Z]}"
+    _s="$_pre$_rest"
+  done
+  [[ -z "$_s" ]]
+}
+
+# A block of text ended, or the answer did: show all that is gathered, even
+# without a blank line or a closing fence, so "Let me check." shows before a tool
+# runs
 render_flush() {
   [[ "$USE_PAGER" -eq 1 ]] || return 0
   if [[ -n "$RENDER_PENDING" ]]; then
-    RENDER_BLOCK+="$RENDER_PENDING"$'\n'
+    render_line "$RENDER_PENDING"
     RENDER_PENDING=""
   fi
   RENDER_FENCE=""
-  render_block
+  RENDER_NEXT=$((${EPOCHREALTIME/[.,]/} + 3600000000))
+  render_finish_block
+  RENDER_NEXT=0
+  render_ready force
 }
 
 # ---------------------------------------------------------------------------
@@ -3105,7 +3161,10 @@ launch_in_tmux() {
   while IFS= read -r var; do
     case "$var" in
       TMUX | TMUX_PANE | TERM | COLUMNS | LINES | PWD | OLDPWD | SHLVL | _) ;;
-      *) printf 'export %s=%q\n' "$var" "${!var}" ;;
+      *)
+        # What bash holds readonly (SHELLOPTS, BASHOPTS) cannot be set there
+        if [[ "${!var@a}" != *r* ]]; then printf 'export %s=%q\n' "$var" "${!var}"; fi
+        ;;
     esac
   done < <(compgen -e) > "$envfile"
   envs=("_CLAUDE_ASK_ENV_FILE=$envfile")

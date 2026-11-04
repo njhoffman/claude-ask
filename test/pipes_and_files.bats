@@ -346,3 +346,98 @@ JSONL
   [ "$status" -eq 0 ]
   [[ "$output" != *"ended without a result"* ]]
 }
+
+# delta_fixture TEXT...: a stream with each TEXT as a delta of one message
+delta_fixture() {
+  printf '%s\n' '{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-5-5"}'
+  printf '%s\n' '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}'
+  local t
+  for t in "$@"; do
+    jq -cn --arg t "$t" '{type: "stream_event", event: {type: "content_block_delta", delta: {type: "text_delta", text: $t}}}'
+  done
+  printf '%s\n' '{"type":"result","is_error":false,"result":"x","session_id":"s","total_cost_usd":0.1,"duration_ms":1,"usage":{"input_tokens":1,"output_tokens":1}}'
+}
+
+@test "a list stays one block through its blank lines, code in it too" {
+  counting_pager
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  delta_fixture $'Intro.\n\n1. first\n\n   more of first\n\n2. second\n\n   ```sh\n   echo a\n\n   echo b\n   ```\n\n- bullet\n\n  - nested\n\nAfter the list.\n\nAnother.\n' > "$CLAUDE_STUB_FIXTURE"
+  run "$SCRIPT_PATH" --pager "$TEST_TEMP_DIR/pager" "q"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_TEMP_DIR/pager-runs")" = $'[Intro.]\n[1. first\n\n   more of first\n\n2. second\n\n   ```sh\n   echo a\n\n   echo b\n   ```\n\n- bullet\n\n  - nested]\n[After the list.]\n[Another.]' ]
+}
+
+@test "a paragraph right after a list ends it, and a list at the end flushes" {
+  counting_pager
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  delta_fixture $'- a\n- b\n\nNot indented.\n\n- c\n\n  under c' > "$CLAUDE_STUB_FIXTURE"
+  run "$SCRIPT_PATH" --pager "$TEST_TEMP_DIR/pager" "q"
+  [ "$(cat "$TEST_TEMP_DIR/pager-runs")" = $'[- a\n- b]\n[Not indented.]\n[- c\n\n  under c]' ]
+}
+
+@test "a table gets a line above it, others do not, and blank ends are trimmed" {
+  cat > "$TEST_TEMP_DIR/pager" <<STUB
+#!/bin/bash
+input=\$(cat; echo x)
+printf '%s' "\${input%x}" >> "$TEST_TEMP_DIR/pager-input"
+printf '%s===\n' '' >> "$TEST_TEMP_DIR/pager-input"
+# As a renderer does: rows with only escape codes around the text
+printf '\e[0m\n\e[39m%s\e[0m\n\e[0m\e[K\n\e[0m\n' "\$(printf '%s' "\$input" | tr -d 'x\n')"
+STUB
+  chmod +x "$TEST_TEMP_DIR/pager"
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  delta_fixture $'| a |\n|---|\n\nPlain.\n\n| b |\n|---|\n' > "$CLAUDE_STUB_FIXTURE"
+  run env -u CLAUDE_ASK_FORCE_TTY "$SCRIPT_PATH" --pager "$TEST_TEMP_DIR/pager" "q"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_TEMP_DIR/pager-input")" = $'\n| a |\n|---|\n===\nPlain.\n===\n\n| b |\n|---|\n===' ]
+  # One blank line between blocks and none at either end
+  [ "$(printf '%s' "$output" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')" = $'| a ||---|\n\nPlain.\n\n| b ||---|' ]
+}
+
+@test "a slow pager runs less often than there are blocks; nothing is lost" {
+  cat > "$TEST_TEMP_DIR/pager" <<STUB
+#!/bin/bash
+sleep 0.2
+input=\$(cat)
+echo run >> "$TEST_TEMP_DIR/pager-runs"
+printf '%s\n' "\$input"
+STUB
+  chmod +x "$TEST_TEMP_DIR/pager"
+  unset CLAUDE_ASK_RENDER_EVERY
+  local texts=() i
+  for i in {1..40}; do texts+=($'Paragraph '"$i"$'.\n\n'); done
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  delta_fixture "${texts[@]}" > "$CLAUDE_STUB_FIXTURE"
+  run env -u CLAUDE_ASK_FORCE_TTY "$SCRIPT_PATH" --pager "$TEST_TEMP_DIR/pager" "q"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$TEST_TEMP_DIR/pager-runs")" -lt 12 ]
+  for i in {1..40}; do [[ "$output" == *"Paragraph $i."* ]]; done
+  [ "$(grep -c '^$' <<< "$output")" -eq 39 ]
+}
+
+@test "with time between them, blocks still show one at a time" {
+  counting_pager
+  export CLAUDE_ASK_RENDER_EVERY=100 CLAUDE_STUB_DELAY=0.3
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  delta_fixture $'One.\n\n' $'Two.\n\n' $'Three.\n\n' > "$CLAUDE_STUB_FIXTURE"
+  run "$SCRIPT_PATH" --pager "$TEST_TEMP_DIR/pager" "q"
+  [ "$(cat "$TEST_TEMP_DIR/pager-runs")" = $'[One.]\n[Two.]\n[Three.]' ]
+}
+
+@test "a tool call shows what is waiting, however soon" {
+  counting_pager
+  export CLAUDE_ASK_RENDER_EVERY=100000 CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  {
+    printf '%s\n' '{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-5-5"}'
+    printf '%s\n' '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}'
+    printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"One.\n\nTwo.\n\nThree"}}}'
+    printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_stop","index":0}}'
+    printf '%s\n' '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m2"}}}'
+    printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Four"}}}'
+    printf '%s\n' '{"type":"result","is_error":false,"result":"x","session_id":"s","total_cost_usd":0.1,"duration_ms":1,"usage":{"input_tokens":1,"output_tokens":1}}'
+  } > "$CLAUDE_STUB_FIXTURE"
+  run "$SCRIPT_PATH" --pager "$TEST_TEMP_DIR/pager" "q"
+  [ "$status" -eq 0 ]
+  # The first run as soon as the first block is done; the rest at the block's end
+  [ "$(cat "$TEST_TEMP_DIR/pager-runs")" = $'[One.]\n[Two.\n\nThree]\n[Four]' ]
+}
