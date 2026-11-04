@@ -2,14 +2,14 @@
 # ${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-~/.local/share}/bash-completion}/completions
 # as claude-ask, where bash-completion loads it on first use (or source it)
 
-_claude_ask_options="-i --interactive -r --resume --resume= -e --effort
-  -m --model -y --yank -Y --yank-code --yank-code= --split --split= --popup
-  --theme --pager --no-pager --demo-themes --demo-output --no-stream
-  --save-raw --history --session --debug-log --debug-log= --version -h --help"
+_claude_ask_options="-i --interactive -r --resume --resume= -e --effort --effort=
+  -m --model --model= -y --yank -Y --yank-code --yank-code= --split --split= --popup
+  --theme --theme= --pager --pager= --no-pager --demo-themes --demo-output --no-stream
+  --save-raw --history --session --session= --debug-log --debug-log= --version -h --help"
 
 # Saved session names (for --session and --resume=)
 _claude_ask_sessions() {
-  local dir="${SESSION_DIR:-$HOME/.local/share/claude/cli-sessions}" f name
+  local dir="${SESSION_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/claude-ask/sessions}" f name
   for f in "$dir"/*.json; do
     [[ -e "$f" ]] || continue
     name="${f##*/}"
@@ -46,11 +46,15 @@ _claude_ask() {
   fi
   if [[ -n "$opt" ]]; then
     case "$opt" in
-      --resume)
+      --resume | --session)
         mapfile -t names < <(_claude_ask_sessions)
         _claude_ask_reply "$cur" "${names[@]}"
         ;;
       --split) _claude_ask_reply "$cur" h v auto ;;
+      --effort) _claude_ask_reply "$cur" low medium high xhigh max ;;
+      --model) _claude_ask_reply "$cur" opus sonnet haiku fable ;;
+      --theme) _claude_ask_reply "$cur" minimal bubbles powerline ;;
+      --pager) mapfile -t COMPREPLY < <(compgen -c -- "$cur") ;;
       --debug-log) mapfile -t COMPREPLY < <(compgen -f -- "$cur") ;;
       *) COMPREPLY=() ;;
     esac

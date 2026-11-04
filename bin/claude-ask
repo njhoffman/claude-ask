@@ -15,7 +15,7 @@
 # after the one given; with -i the chat then goes on at the terminal. When
 # stdout is not a terminal it gets only the answer.
 #
-# Options:
+# Options (values also as --option=VALUE, short flags can be bundled: -ir):
 #   -i, --interactive  Keep the chat open after answering the question
 #   -r, --resume       Continue the most recent saved session (with a
 #                      question: ask it there; without: chat there); it keeps
@@ -75,7 +75,9 @@
 #   claude-ask --debug-log "What is 2+2?"         # enable debug logging
 #
 # Environment:
-#   SESSION_DIR        Where sessions are saved (default: ~/.local/share/claude/cli-sessions)
+#   SESSION_DIR        Where sessions are saved
+#                      (default: ${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions)
+#   VISUAL, EDITOR     The editor for \\e, with any arguments (default: vi)
 #   CLAUDE_ASK_BIN     The claude command to run (default: claude)
 #   CLAUDE_ASK_PAGER   The default pager command (default: nvcat --pager less)
 #   CLAUDE_ASK_EFFORT  The default effort level (-e overrides it)
@@ -92,6 +94,18 @@
 #   CLAUDE_ASK_POPUP_PAGER  Pager for the answer in --popup (default: less -R -+F)
 
 set -euo pipefail
+
+# Started by --split or --popup: this shell's environment, which tmux would
+# not pass on, from the private file launch_in_tmux wrote. Deleting it is also
+# how launch_in_tmux can tell the run started.
+if [[ -n "${_CLAUDE_ASK_ENV_FILE:-}" ]]; then
+  if [[ -O "$_CLAUDE_ASK_ENV_FILE" ]]; then
+    # shellcheck disable=SC1090 # written by launch_in_tmux
+    source "$_CLAUDE_ASK_ENV_FILE"
+    rm -f "$_CLAUDE_ASK_ENV_FILE"
+  fi
+  unset _CLAUDE_ASK_ENV_FILE
+fi
 
 # Numbers are formatted with "." whatever the user's locale (the cost comes
 # from jq with a "." and printf would reject it under a comma-decimal
@@ -126,7 +140,9 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-ask"
 DEFAULT_DEBUG_LOG="$STATE_DIR/debug.log"
 CHAT_HISTORY_FILE="$STATE_DIR/history"
 MAX_DISPLAY_NAME=20
-DEFAULT_SESSION_DIR="$HOME/.local/share/claude/cli-sessions"
+DEFAULT_SESSION_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-ask/sessions"
+OLD_SESSION_DIR="$HOME/.local/share/claude/cli-sessions" # before 0.10.0
+SESSION_DIR_CHOSEN="${SESSION_DIR:+1}"
 SESSION_DIR="${SESSION_DIR:-$DEFAULT_SESSION_DIR}"
 CLAUDE_BIN="${CLAUDE_ASK_BIN:-claude}"
 # Passed to claude as --effort and --model; empty means claude's own default.
@@ -178,6 +194,10 @@ usage() {
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --theme=* | --effort=* | --model=* | --pager=* | --session=*)
+      set -- "${1%%=*}" "${1#*=}" "${@:2}"
+      continue
+      ;;
     --theme)
       [[ $# -lt 2 ]] && {
         echo "Error: --theme requires an argument" >&2
@@ -191,10 +211,10 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -e | --effort)
-      [[ $# -lt 2 ]] && {
+      if [[ $# -lt 2 || -z "$2" ]]; then
         echo "Error: $1 requires an argument" >&2
         exit 1
-      }
+      fi
       EFFORT="$2"
       shift 2
       ;;
@@ -241,10 +261,10 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --pager)
-      [[ $# -lt 2 ]] && {
+      if [[ $# -lt 2 || -z "$2" ]]; then
         echo "Error: --pager requires an argument" >&2
         exit 1
-      }
+      fi
       PAGER_CMD="$2"
       PAGER_IS_DEFAULT=0
       shift 2
@@ -291,7 +311,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --session)
-      if [[ $# -ge 2 && ! "$2" =~ ^- ]]; then
+      if [[ $# -ge 2 && -n "$2" && ! "$2" =~ ^- ]]; then
         VIEW_SESSION="$2"
         shift 2
       else
@@ -323,6 +343,11 @@ while [[ $# -gt 0 ]]; do
       POSITIONAL+=("$@")
       break
       ;;
+    -[a-zA-Z][a-zA-Z]*)
+      # Bundled short flags: -ir is -i -r, and -ie high is -i -e high
+      set -- "${1:0:2}" "-${1:2}" "${@:2}"
+      continue
+      ;;
     -*)
       echo "Unknown option: $1" >&2
       exit 1
@@ -342,6 +367,20 @@ fi
 if [[ -n "$EFFORT" && ! "$EFFORT" =~ $EFFORT_RE ]]; then
   echo "Error: effort must be one of: $EFFORT_LEVELS" >&2
   exit 1
+fi
+
+# Sessions from before 0.10.0 move once to the new default place. A failed move
+# stays usable: the old place is used, and it is tried again next time.
+if [[ -z "$SESSION_DIR_CHOSEN" && -d "$OLD_SESSION_DIR" && ! -e "$SESSION_DIR" ]]; then
+  if (
+    umask 077
+    mkdir -p "${SESSION_DIR%/*}"
+  ) && mv "$OLD_SESSION_DIR" "$SESSION_DIR" 2> /dev/null; then
+    echo "claude-ask: moved saved sessions to $SESSION_DIR" >&2
+  else
+    SESSION_DIR="$OLD_SESSION_DIR"
+    SESSION_DIR_CHOSEN=1
+  fi
 fi
 
 # Fail early, with a clear message, when a required command is missing
@@ -372,11 +411,6 @@ debug_log "args parsed: EFFORT=${EFFORT:-default} MODEL=${MODEL:-default} THEME=
 
 question="${POSITIONAL[*]:-}"
 
-# In a popup: tell launch_in_tmux the run started (see there)
-if [[ -n "${_CLAUDE_ASK_STARTED:-}" ]]; then
-  rm -f "$_CLAUDE_ASK_STARTED"
-  unset _CLAUDE_ASK_STARTED
-fi
 # --split and --popup hand the question to the new claude-ask in a private
 # temp file (a long piped question could be too big for a tmux command)
 if [[ -n "${_CLAUDE_ASK_QUESTION_TMP:-}" ]]; then
@@ -771,9 +805,15 @@ format_elapsed() {
 # OUT lines chars chunks elapsed status is_thinking [extra]: the line under
 # the bar; extra (e.g. "turn 3 | $0.0412 total") is appended
 render_stream_info() {
-  local _out="$1" _lines="$2" _chars="$3" _chunks="$4" _elapsed="$5" _is_done="$6" _is_thinking="${7:-0}" _extra="${8:-}"
-  local _info="  ${FG_DIM}" _count_str _elapsed_str
-  if [[ "$_is_thinking" -eq 1 && "$_is_done" != "done" ]]; then
+  local _out="$1" _lines="$2" _chars="$3" _chunks="$4" _elapsed="$5" _is_done="$6" _is_thinking="${7:-0}" _extra="${8:-}" _tool="${9:-}"
+  local _info="  ${FG_DIM}" _count_str _elapsed_str _room=60
+  if [[ -n "$_tool" && "$_is_done" != "done" ]]; then
+    # What is left of the width after the counts (about 45), so it stays one row
+    if ((TERM_COLS > 0)); then _room=$((TERM_COLS - 45)); fi
+    if ((_room < 12)); then _room=12; fi
+    if ((${#_tool} > _room)); then _tool="${_tool:0:_room-1}…"; fi
+    _info+="${_tool} ${FG_DIM}|${RST}${FG_DIM} "
+  elif [[ "$_is_thinking" -eq 1 && "$_is_done" != "done" ]]; then
     _info+="thinking... ${FG_DIM}|${RST}${FG_DIM} "
   fi
   format_count _count_str "$_chars"
@@ -835,6 +875,8 @@ reset_stream_state() {
   stream_error=""
   api_error="" # an assistant event's error code, e.g. model_not_found
   is_thinking=0
+  current_tool="" # the tool running now, for the info line
+  denied_tools="" # the tools the result says were denied
   answer_lines=0
   answer_chars=0
   text_chunks=0
@@ -851,7 +893,9 @@ CONTROL_CHARS_RE='[\u0000-\u0008\u000b-\u001f\u007f-\u009f]'
 # out: type, model,
 # session_id, text (every text block joined), has_thinking, input tokens,
 # output tokens, cost, duration_ms, is_error, result text, error (an
-# assistant event's error code), message id (one message can span events).
+# assistant event's error code), message id (one message can span events),
+# the tool the event starts ("Bash: git status"), the tools a result says were
+# denied.
 # shellcheck disable=SC2016 # $u is a jq variable
 STREAM_FIELDS_JQ='
   (if .type == "result" then .usage else .message.usage end) as $u
@@ -862,9 +906,16 @@ STREAM_FIELDS_JQ='
       (if .is_error == true then 1 else 0 end),
       (if .type == "result" then .result else null end),
       (if .type == "assistant" then .error else null end),
-      .message.id ]
+      .message.id,
+      ([.message.content[]? | select(.type == "tool_use")] | last
+       | if . == null then null
+         else .name + (.input
+           | (.command // .file_path // .path // .pattern // .url // .query // .description // "")
+           | tostring | (split("\n")[0] // "") | if . == "" then "" else ": " + . end)
+         end),
+      ([.permission_denials[]?.tool_name] | unique | join(", ")) ]
   | map((. // "" | tostring | gsub("'"$CONTROL_CHARS_RE"'"; "")) + "\u0000") | add'
-STREAM_FIELD_COUNT=13
+STREAM_FIELD_COUNT=15
 
 # The parser is one jq that lives for the whole run, a coprocess fed one
 # line at a time, instead of a jq started for every event. It reads raw
@@ -958,6 +1009,7 @@ process_stream_line() {
         fi
         if [[ -n "${f[12]}" ]]; then answer_message_id="${f[12]}"; fi
         answer_text+="$CHUNK"
+        current_tool=""
         text_chunks=$((text_chunks + 1))
         answer_chars=$((answer_chars + ${#CHUNK}))
         local newlines="${CHUNK//[!$'\n']/}"
@@ -965,9 +1017,19 @@ process_stream_line() {
       elif [[ "${f[4]}" == 1 ]]; then
         is_thinking=1
       fi
+      if [[ -n "${f[13]}" ]]; then
+        is_thinking=0
+        current_tool="${f[13]}"
+      fi
+      ;;
+    user)
+      # A tool's result: it has finished
+      current_tool=""
       ;;
     result)
       status="done"
+      current_tool=""
+      denied_tools="${f[14]}"
       result_text="${f[10]}"
       if [[ -n "${f[7]}" ]]; then cost="${f[7]}"; fi
       if [[ -n "${f[8]}" ]]; then duration_ms="${f[8]}"; fi
@@ -1111,10 +1173,19 @@ yank_answer() {
   yank_text "$text" "$what"
 }
 
+# session_file_ok FILE: whether FILE is one JSON object; if not, says so
+session_file_ok() {
+  if ! jq -se 'length == 1 and (.[0] | type == "object")' "$1" > /dev/null 2>&1; then
+    echo "claude-ask: $(basename "$1" .json) is not a valid session file ($1)" >&2
+    return 1
+  fi
+}
+
 # yank_session_file FILE: yank_answer with the session's last answer and
 # the -y/-Y choice
 yank_session_file() {
   local answer
+  session_file_ok "$1" || return 1
   answer=$(jq -r "${SESSION_TURNS_JQ}"'.answer // empty | clean' "$1")
   yank_answer "$answer" "$YANK" "$YANK_CODE_N"
 }
@@ -1704,6 +1775,36 @@ history_records() {
   done
 }
 
+# display_width OUT TEXT: the columns TEXT takes. Only text that is not ASCII
+# costs a process, for double-width characters (wc -L; else its characters).
+display_width() {
+  local _w=""
+  if [[ "$2" == *[![:ascii:]]* ]]; then
+    _w=$(printf '%s' "$2" | wc -L 2> /dev/null) || _w=""
+  fi
+  printf -v "$1" '%d' "${_w:-${#2}}"
+}
+
+# fit_column OUT TEXT WIDTH: TEXT cut (with an ellipsis) or padded with spaces
+# to exactly WIDTH columns
+fit_column() {
+  local _t="$2" _width="$3" columns _over
+  display_width columns "$_t"
+  if ((columns > _width)); then
+    _t="${_t:0:_width-1}"
+    display_width columns "$_t"
+    while ((columns > _width - 1)); do
+      # At most two columns a character, so this does not overshoot by more
+      _over=$(((columns - _width + 2) / 2))
+      _t="${_t:0:${#_t}-_over}"
+      display_width columns "$_t"
+    done
+    _t+="…"
+    columns=$((columns + 1))
+  fi
+  printf -v "$1" '%s%*s' "$_t" "$((_width - columns))" ""
+}
+
 show_history() {
   local session_dir="$1"
   local files=() f
@@ -1719,6 +1820,22 @@ show_history() {
 
   history_records "${files[@]}"
   local idx=1 i now name epoch question_text answer_lines turn_count time_ago disp_name disp_q size
+  # At a terminal the question gets what is left of the width, and in a very
+  # narrow one the name goes too. 12 is the size column ("1234L 12T") and its
+  # separator; to a pipe, or with no known width, it stays at the widest.
+  local q_width=40 name_width=$((MAX_DISPLAY_NAME + 1)) idx_width=${#files[@]} room
+  idx_width=${#idx_width}
+  TERM_COLS=0
+  if ((OUT_TTY)) || [[ -n "${CLAUDE_ASK_COLUMNS:-}" ]]; then read_term_cols; fi
+  if ((TERM_COLS > 0)); then
+    room=$((TERM_COLS - idx_width - 3 - 13 - 3 - name_width - 3 - 12))
+    if ((room < 16)); then
+      room=$((room + name_width + 3))
+      name_width=0
+    fi
+    if ((room < 8)); then room=8; fi
+    if ((room < q_width)); then q_width=$room; fi
+  fi
   printf -v now '%(%s)T' -1
   for ((i = 0; i + 4 < ${#HISTORY_RECORDS[@]}; i += 5)); do
     name="${HISTORY_RECORDS[i]##*/}"
@@ -1728,25 +1845,19 @@ show_history() {
     answer_lines="${HISTORY_RECORDS[i + 3]:-0}"
     turn_count="${HISTORY_RECORDS[i + 4]:-1}"
 
-    # Truncate name with ellipsis
-    disp_name="$name"
-    if [[ ${#disp_name} -gt $MAX_DISPLAY_NAME ]]; then
-      disp_name="${disp_name:0:$((MAX_DISPLAY_NAME))}…"
+    disp_name=""
+    if ((name_width > 0)); then
+      fit_column disp_name "$name" "$name_width"
+      disp_name+=" | "
     fi
-
-    # Truncate question
-    disp_q="$question_text"
-    if [[ ${#disp_q} -gt 40 ]]; then
-      disp_q="${disp_q:0:39}…"
-    fi
+    fit_column disp_q "${question_text//$'\n'/ }" "$q_width"
 
     time_ago=""
     if [[ "$epoch" =~ ^[0-9]+$ ]]; then format_age time_ago "$((now - epoch))"; fi
 
     size="${answer_lines}L"
     if [[ "$turn_count" -gt 1 ]]; then size+=" ${turn_count}T"; fi
-    printf '%d | %-13s | %-*s | %-40s | %s\n' \
-      "$idx" "$time_ago" "$((MAX_DISPLAY_NAME + 1))" "$disp_name" "${disp_q//$'\n'/ }" "$size"
+    printf '%*d | %-13s | %s%s | %s\n' "$idx_width" "$idx" "$time_ago" "$disp_name" "$disp_q" "$size"
 
     ((idx++))
   done
@@ -1814,6 +1925,7 @@ view_session() {
     yank_session_file "$session_file"
     return
   fi
+  session_file_ok "$session_file" || return 1
   debug_log "viewing session: $session_file"
   show_turns "$session_file" all
 }
@@ -1831,6 +1943,19 @@ show_turns() {
     | [(.model // $model), .effort, .question, .answer, (.is_error // false),
        .cost_usd, .duration_ms, .usage.input_tokens, .usage.output_tokens]
     | map((. // "" | tostring | clean) + "\u0000") | add' "$file")
+  # More than one turn at a terminal: one less over all of them, not the
+  # renderer's own pager once per turn (writing to a pipe, it only renders).
+  # -F: a replay that fits is just printed. Quitting early is not a failure.
+  if [[ -t 1 && "$USE_PAGER" -eq 1 && ${#fields[@]} -gt 9 ]] && command -v less > /dev/null 2>&1; then
+    show_turn_fields 1 | less -R -F -X || true
+  else
+    show_turn_fields "$BAR_FD"
+  fi
+}
+
+# show_turns' loop, over its fields; the status bars go to fd $1
+show_turn_fields() {
+  local BAR_FD="$1"
   for ((i = 0; i + 8 < ${#fields[@]}; i += 9)); do
     if ((i > 0)); then printf '\n'; fi
     model_label label "$(short_model_name "${fields[i]}")" "${fields[i + 1]}"
@@ -1926,7 +2051,7 @@ emit_text() {
 update_status_bar() {
   local bar_text info_text bar_rows info_rows rows i out=""
   render_status_bar_fitted bar_text "$@"
-  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking" "${CONV_INFO:-}"
+  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking" "${CONV_INFO:-}" "$current_tool"
   text_rows bar_rows "$bar_text"
   text_rows info_rows "$info_text"
   rows=$((1 + bar_rows + info_rows))
@@ -2241,6 +2366,9 @@ ask_once() {
     CONV_INFO="turn ${CONV_TURNS}${total:+ | $total total}"
   fi
   show_final_status_bar
+  if [[ -n "$denied_tools" ]]; then
+    printf 'claude-ask: not permitted: %s\n' "$denied_tools" >&2
+  fi
 
   # Report failures: claude's exit status, an error result, or no result
   if [[ "$claude_status" -ne 0 || "$status" == "error" ]]; then
@@ -2288,10 +2416,11 @@ page_answer_in_popup() {
 
 # --split and --popup: start claude-ask again in a new tmux pane or a popup
 # with the same choices, and the question (if any) in a private temp file.
-# tmux runs it with the server's environment, so ours is passed on: PATH,
-# where sessions and state live, the editor and every CLAUDE_ASK_ variable.
+# tmux runs it with the server's environment, so this shell's goes in a private
+# file too, not on tmux's command line where ps shows it: all that is exported,
+# but what belongs to the new pane.
 launch_in_tmux() {
-  local self child=() envs=() var qfile="" started="" w h dir size
+  local self child=() envs=() var qfile="" envfile w h dir size
   self=$(readlink -f "${BASH_SOURCE[0]}")
   child=(--theme "$THEME")
   if [[ -n "$EFFORT" ]]; then child+=(--effort "$EFFORT"); fi
@@ -2314,9 +2443,14 @@ launch_in_tmux() {
     code) child+=("--yank-code${YANK_CODE_N:+=$YANK_CODE_N}") ;;
   esac
 
-  for var in PATH SESSION_DIR XDG_STATE_HOME XDG_RUNTIME_DIR EDITOR $(compgen -e CLAUDE_ASK_); do
-    if [[ -n "${!var:-}" ]]; then envs+=(-e "$var=${!var}"); fi
-  done
+  envfile=$(mktemp "${run_dir_base}/claude-ask-env.XXXXXX")
+  while IFS= read -r var; do
+    case "$var" in
+      TMUX | TMUX_PANE | TERM | COLUMNS | LINES | PWD | OLDPWD | SHLVL | _) ;;
+      *) printf 'export %s=%q\n' "$var" "${!var}" ;;
+    esac
+  done < <(compgen -e) > "$envfile"
+  envs=(-e "_CLAUDE_ASK_ENV_FILE=$envfile")
   if [[ -n "$question" ]]; then
     qfile=$(mktemp "${run_dir_base}/claude-ask-question.XXXXXX")
     printf '%s' "$question" > "$qfile"
@@ -2347,16 +2481,14 @@ launch_in_tmux() {
     w="${size%%x*}"
     h="${size#*x}"
     # display-popup -E waits for the run in the popup and returns its exit
-    # status, so a failed answer is not tmux failing: the run deletes this
-    # file as it starts, and then its status is passed on as it is
-    started=$(mktemp "${run_dir_base}/claude-ask-started.XXXXXX")
-    envs+=(-e "_CLAUDE_ASK_STARTED=$started")
+    # status, so a failed answer is not tmux failing: the run deletes the
+    # environment file as it starts, and then its status is passed on as it is
     debug_log "tmux popup: $w x $h ${child[*]}"
     tmux display-popup -E -w "$w" -h "$h" -d "$PWD" "${envs[@]}" -- "$self" "${child[@]}" || rc=$?
-    if ((rc != 0)) && [[ ! -e "$started" ]]; then return "$rc"; fi
-    rm -f "$started"
+    if ((rc != 0)) && [[ ! -e "$envfile" ]]; then return "$rc"; fi
   fi
   if ((rc != 0)); then
+    rm -f "$envfile"
     if [[ -n "$qfile" ]]; then rm -f "$qfile"; fi
     echo "claude-ask: tmux could not start the $TMUX_MODE (status $rc)" >&2
     return 1
@@ -2382,6 +2514,7 @@ resume_session() {
     fi
   fi
 
+  session_file_ok "$file" || return 1
   mapfile -d '' -t fields < <(jq -j "${SESSION_TURNS_JQ}"'
     (turns_of | last) as $last
     | [(.session_id // ""), (turns_of | length), (.cost_usd // ""), (.cwd // ""),
@@ -2422,7 +2555,8 @@ compose_in_editor() {
   local f="$RUN_DIR/question.md"
   COMPOSED=""
   : > "$f"
-  "${EDITOR:-vi}" "$f" || return 1
+  # As git does: the variable can hold arguments ("code --wait")
+  bash -c "${VISUAL:-${EDITOR:-vi}} \"\$1\"" editor "$f" || return 1
   COMPOSED=$(< "$f")
   [[ "$COMPOSED" =~ [^[:space:]] ]]
 }
@@ -2649,6 +2783,8 @@ chat_more_pasted() {
   read -r -t 0
 }
 
+CHAT_NEWLINE_MARK="⏎"
+
 # The chat: read questions at a "> " prompt and ask each one in the same
 # conversation. Ctrl-D, exit or quit ends it; \e opens the editor; lines
 # starting with a /command go to chat_command.
@@ -2704,6 +2840,12 @@ chat_loop() {
     trimmed="${line#"${line%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
     if [[ -z "$trimmed" ]]; then continue; fi
+    # A multi-line question recalled from the history: read -e stops at a
+    # newline, so history holds it on one line, with this mark for each
+    if [[ "$line" == *"$CHAT_NEWLINE_MARK"* ]]; then
+      line="${line//"$CHAT_NEWLINE_MARK"/$'\n'}"
+      pasted=1
+    fi
     # A paste is a question, even one that starts with /word or exit
     if ((pasted)); then trimmed=""; fi
     case "$trimmed" in
@@ -2726,7 +2868,7 @@ chat_loop() {
         ;;
     esac
 
-    history -s "$line"
+    history -s "${line//$'\n'/$CHAT_NEWLINE_MARK}"
     history -a 2> /dev/null || true
 
     rc=0
@@ -2753,7 +2895,7 @@ require_cmds "$CLAUDE_BIN"
   umask 077
   mkdir -p "$SESSION_DIR"
 )
-if [[ "$SESSION_DIR" == "$DEFAULT_SESSION_DIR" ]]; then chmod 700 "$SESSION_DIR"; fi
+if [[ -z "$SESSION_DIR_CHOSEN" ]]; then chmod 700 "$SESSION_DIR"; fi
 
 RAW_JSON="$RUN_DIR/stream.jsonl"
 CLAUDE_STDERR="$RUN_DIR/claude.stderr"

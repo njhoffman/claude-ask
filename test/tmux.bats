@@ -68,10 +68,31 @@ launch_call() {
 @test "--split passes the environment tmux would not" {
   export CLAUDE_ASK_EFFORT=low
   run "$SCRIPT_PATH" --split "q"
-  launch_call | grep -q -- "-e CLAUDE_ASK_EFFORT=low"
-  launch_call | grep -q -- "-e SESSION_DIR=$SESSION_DIR"
-  launch_call | grep -q -- "-e CLAUDE_ASK_BIN=$CLAUDE_ASK_BIN"
-  launch_call | grep -q -- "-e PATH="
+  # In a private file, not on the command line where ps would show them
+  ! launch_call | grep -q "CLAUDE_ASK_EFFORT\|SESSION_DIR\|PATH="
+  local envfile
+  envfile=$(launch_call | grep -o '_CLAUDE_ASK_ENV_FILE=[^ ]*' | cut -d= -f2)
+  [ "$(stat -c %a "$envfile")" = 600 ]
+  grep -q '^export CLAUDE_ASK_EFFORT=low$' "$envfile"
+  grep -q "^export SESSION_DIR=" "$envfile"
+  grep -q "^export PATH=" "$envfile"
+}
+
+@test "the environment file holds all that is exported, but the pane's own" {
+  export ANTHROPIC_API_KEY=secret-key HTTPS_PROXY='http://p:1' WITH_NEWLINE=$'a\nb c'
+  run "$SCRIPT_PATH" --split "q"
+  local envfile
+  envfile=$(launch_call | grep -o '_CLAUDE_ASK_ENV_FILE=[^ ]*' | cut -d= -f2)
+  ! launch_call | grep -q secret-key
+  grep -q '^export ANTHROPIC_API_KEY=secret-key$' "$envfile"
+  ! grep -qE '^export (TMUX|TMUX_PANE|TERM|COLUMNS|LINES|PWD|OLDPWD|SHLVL)=' "$envfile"
+  # Read back as it was, and deleted by the run that reads it
+  [ "$(bash -c "source '$envfile'; printf %s \"\$WITH_NEWLINE\"")" = $'a\nb c' ]
+}
+
+@test "an environment file owned by someone else, or missing, is ignored" {
+  run env _CLAUDE_ASK_ENV_FILE="$TEST_TEMP_DIR/missing" "$SCRIPT_PATH" --version
+  [ "$status" -eq 0 ]
 }
 
 @test "--split: the new pane reads the question file, deletes it and answers" {
@@ -136,7 +157,7 @@ launch_call() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"Invalid API key"* ]]
   [[ "$output" != *"could not start"* ]]
-  [ -z "$(ls "$XDG_RUNTIME_DIR" | grep claude-ask-started)" ]
+  [ -z "$(ls "$XDG_RUNTIME_DIR" | grep claude-ask-env)" ]
 }
 
 @test "--popup: when tmux fails it says so and removes its files" {
@@ -144,7 +165,7 @@ launch_call() {
   run "$SCRIPT_PATH" --popup "q"
   [ "$status" -eq 1 ]
   [[ "$output" == *"tmux could not start the popup"* ]]
-  [ -z "$(ls "$XDG_RUNTIME_DIR" | grep 'claude-ask-\(question\|started\)')" ]
+  [ -z "$(ls "$XDG_RUNTIME_DIR" | grep 'claude-ask-\(question\|env\)')" ]
 }
 
 @test "when tmux fails the question file is removed and it says so" {

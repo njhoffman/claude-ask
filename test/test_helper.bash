@@ -27,7 +27,8 @@ common_setup() {
   # Tests capture stdout but look at the bar too; a real stdin could be a pipe
   # that never ends, which a question would wait on
   export CLAUDE_ASK_FORCE_TTY=1
-  unset NO_COLOR
+  # VISUAL comes before the EDITOR a test sets, and would open the real editor
+  unset NO_COLOR VISUAL
   exec < /dev/null
   # Never the real tmux session the suite may run in, nor the clipboard
   unset TMUX TMUX_PANE CLAUDE_STUB_TMUX_LOG CLAUDE_STUB_TMUX_SIZE CLAUDE_STUB_TMUX_BUFFER

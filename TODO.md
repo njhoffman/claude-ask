@@ -60,7 +60,7 @@ Reviewed: 2026-11-03
   the status bar sits still until then. Pass it and parse the `stream_event`
   text deltas, without printing the final `assistant` message again. Far more
   chunks would end mid-line, so see the exact-width item below.
-- [ ] **Show what `claude` is doing during tool calls.** (p3) [feature]
+- [x] **Show what `claude` is doing during tool calls.** (p3) [feature]
   `tool_use` blocks are ignored (`Bash` never appears in the output), so a long
   tool run looks like a hung spinner. Put the tool's name in the info line, as
   `thinking...` is now, and show denied tools: in `-p` mode these fail quietly.
@@ -78,20 +78,20 @@ Reviewed: 2026-11-03
   here, in a `0775` directory), unlike the chat history (`0600`). Create the
   directory `0700` and the files `0600` (`umask 077` around `save_session`,
   including `--save-raw`), and tighten existing ones when they are next written.
-- [ ] **A corrupt session file gives a poor error.** (p3) [bug]
+- [x] **A corrupt session file gives a poor error.** (p3) [bug]
   `--session bad` prints jq's parse error and exits 0; `--resume=bad` says "has
   no session id and cannot be resumed". Check that the file parses and report
   "NAME is not a valid session file", exit 1.
-- [ ] **`--session` opens the pager once per turn.** (p3) [bug] `show_turn` runs
+- [x] **`--session` opens the pager once per turn.** (p3) [bug] `show_turn` runs
   the pager for each turn, so a 3-turn session runs it 3 times (counted) and
   with the default `nvcat --pager less` needs `q` once per turn. Render all
   turns as one document for one pager.
-- [ ] **Multi-line questions come back split from the history file.** (p3) [bug]
+- [x] **Multi-line questions come back split from the history file.** (p3) [bug]
   A pasted question is one entry during the chat, but the file holds its lines
   separately, so next time each is its own up-arrow entry. Bash has no format
   for this without timestamps: `HISTTIMEFORMAT` with `lithist`, or store them
   joined.
-- [ ] **The session directory ignores `XDG_DATA_HOME`.** (p3) [bug] `STATE_DIR`
+- [x] **The session directory ignores `XDG_DATA_HOME`.** (p3) [bug] `STATE_DIR`
   honors `XDG_STATE_HOME`, but `SESSION_DIR` is always under
   `~/.local/share/claude/`, inside a directory named after another tool. Use
   `${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions`, falling back to the old
@@ -100,7 +100,7 @@ Reviewed: 2026-11-03
   to find or remove them: `--history` lists all of them. Add a limit
   (`--history=N`), a search over questions and answers, and `--delete ID|N` or
   an age-based prune.
-- [ ] **`--history` does not fit the terminal.** (p3) [bug] The table has fixed
+- [x] **`--history` does not fit the terminal.** (p3) [bug] The table has fixed
   widths of about 90 columns, wrapping in a narrow pane, and counts characters,
   so 39 double-width characters take 78 columns and push the row out of line.
   Use `TERM_COLS` and display width; `disp_name` also hides what makes long names
@@ -108,18 +108,18 @@ Reviewed: 2026-11-03
 
 ## 5. Options and tmux
 
-- [ ] **`--split` and `--popup` lose the shell's environment.** (p3) [bug]
+- [x] **`--split` and `--popup` lose the shell's environment.** (p3) [bug]
   tmux runs them with the server's environment, and `launch_in_tmux` passes on
   only `PATH`, `SESSION_DIR`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `EDITOR` and
   `CLAUDE_ASK_*`. So `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`, `HTTPS_PROXY`,
   `LESS` and the like set in this shell are not seen, and could mean another
   account. Do not just add them with `-e`, which puts a key in the process list:
   write them to a private file the new run reads and deletes, like the question.
-- [ ] **`EDITOR` with arguments fails.** (p3) [bug] `compose_in_editor` runs
+- [x] **`EDITOR` with arguments fails.** (p3) [bug] `compose_in_editor` runs
   `"${EDITOR:-vi}" "$f"`, so `EDITOR="code --wait"` gives "No such file or
   directory" and `\e` just returns to the prompt. Run it with `bash -c` as git
   does, and try `VISUAL` first.
-- [ ] **No `--theme=X`, `--effort=X`, `--model=X`, or `-ir`.** (p3) [bug] All are
+- [x] **No `--theme=X`, `--effort=X`, `--model=X`, or `-ir`.** (p3) [bug] All are
   "Unknown option", though `--split=`, `--resume=` and `--debug-log=` take that
   form. Accept `=` for every option with a value and split bundled short flags,
   and add them to both completion files.

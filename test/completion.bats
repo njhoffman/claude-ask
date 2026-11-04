@@ -34,13 +34,13 @@ session() {
 # The options --help lists in its Options section: the start of each line
 # that begins with one ("-e, --effort LEVEL Effort ..." gives -e, --effort)
 help_options() {
-  "$SCRIPT_PATH" --help | sed -n '/^Options:/,/^Examples:/p' | grep -E '^  -' |
+  "$SCRIPT_PATH" --help | sed -n '/^Options/,/^Examples:/p' | grep -E '^  -' |
     grep -oE '^  -[^ ]*(, --?[^ ]*)?' | grep -oE -- '--?[a-zA-Z][a-zA-Z-]*' | sort -u
 }
 
 @test "bash: options complete from -" {
   comp --th
-  [ "${COMPREPLY[*]}" = "--theme" ]
+  [ "${COMPREPLY[*]}" = "--theme --theme=" ]
   comp --no-
   [ "${COMPREPLY[*]}" = "--no-pager --no-stream" ]
 }
@@ -97,6 +97,18 @@ help_options() {
   [ "${COMPREPLY[*]}" = "$TEST_TEMP_DIR/ask.log" ]
 }
 
+@test "bash: values after = for every option that takes them" {
+  comp --effort = h
+  [ "${COMPREPLY[*]}" = "high" ]
+  comp --model = s
+  [ "${COMPREPLY[*]}" = "sonnet" ]
+  comp --theme = p
+  [ "${COMPREPLY[*]}" = "powerline" ]
+  session git-rebase 5
+  comp --session = g
+  [ "${COMPREPLY[*]}" = "git-rebase" ]
+}
+
 @test "bash: options ending in = are offered" {
   comp --resume
   [[ " ${COMPREPLY[*]} " == *" --resume= "* ]]
@@ -124,7 +136,7 @@ help_options() {
   local opt missing=()
   while IFS= read -r opt; do
     [[ " $(echo $_claude_ask_options) " == *" $opt "* ]] || missing+=("bash:$opt")
-    grep -qF -e "$opt[" -e "$opt=-[" -e "{$opt," -e ",$opt}" "$ZSH_COMP" || missing+=("zsh:$opt")
+    grep -qF -e "$opt[" -e "$opt=[" -e "$opt=-[" -e "{$opt," -e ",$opt}" -e ")$opt[" "$ZSH_COMP" || missing+=("zsh:$opt")
   done < <(help_options)
   [ "$(help_options | wc -l)" -gt 20 ]
   if ((${#missing[@]})); then
@@ -167,6 +179,6 @@ help_options() {
     source "$1"' zsh "$ZSH_COMP"
   [ "$status" -eq 0 ]
   [[ "$output" == *"[effort (thinking) level]:level:(low medium high xhigh max)"* ]]
-  [[ "$output" == *"--theme[status bar theme]:theme:(minimal bubbles powerline)"* ]]
+  [[ "$output" == *"--theme=[status bar theme]:theme:(minimal bubbles powerline)"* ]]
   [[ "$output" == *"--resume=-["*"::session:_claude-ask_sessions"* ]]
 }

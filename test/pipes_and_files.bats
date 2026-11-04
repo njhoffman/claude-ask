@@ -215,9 +215,10 @@ plain() {
 @test "the default session directory is tightened" {
   export HOME="$TEST_TEMP_DIR/home"
   unset SESSION_DIR
-  mkdir -p -m 755 "$HOME/.local/share/claude/cli-sessions"
+  unset XDG_DATA_HOME
+  mkdir -p -m 755 "$HOME/.local/share/claude-ask/sessions"
   run "$SCRIPT_PATH" --no-pager "q"
-  [ "$(stat -c %a "$HOME/.local/share/claude/cli-sessions")" = 700 ]
+  [ "$(stat -c %a "$HOME/.local/share/claude-ask/sessions")" = 700 ]
 }
 
 @test "claude's tools keep the user's umask" {

@@ -32,7 +32,8 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Control characters**: `CONTROL_CHARS_RE` (a jq regex), in the stream fields
   and `clean` in `SESSION_TURNS_JQ`. Anything shown from a session file uses it.
 - **Sessions**: parsed JSON saved to
-  `~/.local/share/claude/cli-sessions/{question-slug}.json`, plus the raw
+  `${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions/{question-slug}.json`
+  (moved once from `OLD_SESSION_DIR`, unless `SESSION_DIR` is set), plus the raw
   stream as `{question-slug}.jsonl` with `--save-raw`; `--history` lists
   them, `--session ID|N` replays one.
 - **Demos**: `--demo-themes` and `--demo-output` render without calling Claude
@@ -75,12 +76,13 @@ through a pager with a themed status bar redrawn just below the streamed text
   `LAST_ANSWER` is the result text of the last turn (or the session's last
   answer after `-r`). `YANK_PREVIOUS`: `-y`/`-Y` with no question.
 - **tmux**: `launch_in_tmux` re-runs the script with `split-window` or
-  `display-popup`, passing options and `-e VAR=...` (tmux uses the server's
-  environment); the question goes in `_CLAUDE_ASK_QUESTION_TMP` (read and
-  deleted), a popup's paging in `_CLAUDE_ASK_PAGE_AFTER`. `display-popup -E`
-  returns the popup run's status; the run deletes `_CLAUDE_ASK_STARTED` as
-  it starts, so a nonzero status with that file gone is passed on, not
-  reported as tmux failing.
+  `display-popup`, passing options. tmux uses the server's environment, so all
+  that is exported goes in a private file, `_CLAUDE_ASK_ENV_FILE`, which the very
+  top of the script sources and deletes; nothing secret goes on tmux's command
+  line. The question goes in `_CLAUDE_ASK_QUESTION_TMP` (read and deleted), a
+  popup's paging in `_CLAUDE_ASK_PAGE_AFTER`. `display-popup -E` returns the popup
+  run's status, so a nonzero status with the environment file gone is passed on,
+  not reported as tmux failing.
   `test/stubs/tmux` logs calls and can run the command
   (`CLAUDE_STUB_TMUX_RUN`; display-popup then returns its status);
   `test/tmux_popup.bats` drives a real tmux (private server, client in a
@@ -98,6 +100,9 @@ through a pager with a themed status bar redrawn just below the streamed text
   question, last answer and totals (`SESSION_JQ`). Files from before turns are
   read as one turn (`SESSION_TURNS_JQ`'s `turns_of`). Model and cwd come from
   the `init` system event; hook events come before it.
+- **Tools**: stream fields 13 and 14 are the tool an event starts and the result's
+  denied tools; `current_tool` is on the info line until a `user` event, text or
+  the result.
 - **Answers**: events of one message share `.message.id`; a blank line goes
   where it changes, in `process_stream_line` and `SESSION_JQ` alike.
 - **Stream parsing**: `process_stream_line` updates the state variables and
@@ -107,7 +112,10 @@ through a pager with a themed status bar redrawn just below the streamed text
   `STREAM_FIELD_COUNT` fields per input line, an empty one for bad input.
   The coprocess closes inherited fds (the pager FIFO is fd 3) and ignores
   SIGINT; it is restarted if it dies. `save_session` writes session files.
-- **History**: `history_records` reads all session files with one `jq`
+- **Chat history**: read `-e` stops at a newline, so a multi-line question is held
+  on one line with `CHAT_NEWLINE_MARK` (`⏎`), turned back on submit.
+- **History**: `fit_column` and `display_width` do the columns;
+  `history_records` reads all session files with one `jq`
   (`HISTORY_JQ`), falling back to one per file when one is not JSON;
   `format_age` formats the age.
 - **Runtime files**: one private `mktemp -d` per run (under

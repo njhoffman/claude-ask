@@ -6,6 +6,41 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-03
+
+### Changed
+
+- Sessions moved to `${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions`. Those
+  in `~/.local/share/claude/cli-sessions` move there once, on the first run,
+  unless `SESSION_DIR` is set. A chat open during the move cannot save its next
+  turn, so end open chats first.
+- `--split` and `--popup` pass on everything exported in the shell (except what
+  belongs to the new pane, such as `TMUX` and `TERM`), in a private file, not
+  only `CLAUDE_ASK_*` and a few others on tmux's command line where `ps` showed
+  them. So `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR` and proxy settings now apply.
+- `--session` with several turns uses one pager over them all, not one per turn.
+- `--history` fits the terminal, dropping the name column when very narrow, and
+  keeps its columns in line with double-width characters.
+
+### Added
+
+- While a tool runs, the info line shows it (`Bash: git status`), and tools
+  `claude` was not permitted to use are named after the answer.
+- Options with a value take `--option=VALUE` (`--theme`, `--effort`, `--model`,
+  `--pager`, `--session`), short flags can be bundled (`-ir`, `-ie high`), and both
+  completion files know the `=` forms.
+
+### Fixed
+
+- `EDITOR` can hold arguments (`code --wait`), and `VISUAL` comes first.
+- A session file that is not valid is reported as such, with status 1, by
+  `--session`, `--resume=` and `-y`, instead of a jq error and status 0.
+- A multi-line question recalled from the history is asked whole. It is stored
+  on one line, with `⏎` for each line break, and shown that way at the prompt.
+- `--effort=` and `--pager=` with no value are errors.
+- The `--popup` test with `LESS=-F` no longer types keys at `less`, which failed
+  CI for 0.9.0 (on tmux 3.4 the other popup tests passed: `--popup` works there).
+
 ## [0.9.0] - 2026-11-03
 
 ### Changed

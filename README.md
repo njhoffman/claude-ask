@@ -34,8 +34,9 @@ printed straight to the terminal); without `nvcat` they print as plain text.
 `--pager CMD` (run with `bash -c`) or `CLAUDE_ASK_PAGER` picks another
 renderer, `--no-pager` none. In a shell from `~/.shell`, `ask` is an alias
 for `claude-ask`.
-Sessions are saved to `~/.local/share/claude/cli-sessions/` (`SESSION_DIR`
-overrides); `CLAUDE_ASK_BIN` names a different `claude` command. When
+Sessions are saved to `${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions/`
+(`SESSION_DIR` overrides; those in the old `~/.local/share/claude/cli-sessions`
+move there on the first run); `CLAUDE_ASK_BIN` names a different `claude` command. When
 `claude` fails, its error is printed and `claude-ask` exits non-zero.
 `--debug-log` writes to `~/.local/state/claude-ask/debug.log`
 (`--debug-log=FILE` for another file).
@@ -51,6 +52,12 @@ last asked with, unless `-e` or `-m` is given. When `claude` does not know
 the model, the turn is not saved and `claude-ask` goes back to the last model
 that answered (or the default); a model `-r` restored is then retried with
 the default.
+
+Options with a value also take `--option=VALUE`, and short flags can be bundled
+(`-ir`, `-ie high`). While a tool runs, the line under the status bar names it
+(`Bash: git status`); tools `claude` was not permitted to use are listed after
+the answer. `\e` opens `$VISUAL` or `$EDITOR`, which can hold arguments
+(`code --wait`).
 
 In a terminal too narrow for the whole status bar, segments are left out
 from the right (done, duration, cost, tokens); `CLAUDE_ASK_COLUMNS` sets the
@@ -105,8 +112,10 @@ A line whose first word is some other `/word` is refused as an unknown
 command; one like `/etc/hosts: what is this?` is asked as a question.
 Ctrl-C stops the answer being streamed without leaving the chat; at the
 prompt it clears the line, as a shell does. Questions are kept in
-`~/.local/state/claude-ask/history` for the up arrow. Each conversation is one session file with a `turns` list;
-`--history` shows the turn count and `--session` replays every turn.
+`~/.local/state/claude-ask/history` for the up arrow; a multi-line one comes back
+on one line, with `⏎` for each line break. Each conversation is one session file with a `turns` list;
+`--history` shows the turn count, fitted to the terminal, and `--session` replays
+every turn, in one pager when there are several.
 
 ## Yanking
 
@@ -129,8 +138,9 @@ there and so does the focus. `--popup` uses a tmux popup instead
 (`CLAUDE_ASK_POPUP_SIZE`, e.g. `90%` or `120x40`): a question's answer
 streams, then opens in a pager (`CLAUDE_ASK_POPUP_PAGER`, default
 `less -R -+F`), and quitting the pager closes the popup; without a question
-it is a chat until `/quit`. Both pass on the other options and the
-`CLAUDE_ASK_*` variables, which tmux would otherwise not see.
+it is a chat until `/quit`. Both pass on the other options and everything
+exported in your shell, which tmux would otherwise not see, in a private file
+the new run reads and deletes, so API keys stay out of the process list.
 
 ## Install
 

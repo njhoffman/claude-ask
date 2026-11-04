@@ -56,11 +56,27 @@ CA="$BATS_TEST_DIRNAME/../bin/claude-ask"
 
 @test "popup: the pager waits even when LESS has -F" {
   export LESS=-F
-  in_tmux "send:$CA --popup q; echo RC=\$?\\r" 'expect:(END)' 'sleep:1' \
-    'send:echo EA""RLY\r' 'sleep:0.5' 'send:q' 'expect:RC=0' 'send:echo AF""TER\r' 'expect:AFTER'
+  # With -F in effect less would quit at once on a short answer and never show
+  # (END). No keys while it pages: less has commands for most of them.
+  in_tmux "send:$CA --popup q; echo RC=\$?\\r" 'expect:(END)' 'sleep:1' 'send:q' \
+    'expect:RC=0' 'send:echo AF""TER\r' 'expect:AFTER'
   [ "$status" -eq 0 ]
-  # The keys typed while it paged went to less, not to the shell
-  [[ "$screen_text" != *"EARLY"* ]]
+  local paged="${screen_text%%(END)*}"
+  [[ "$paged" != *"RC=0"* ]]
+}
+
+@test "popup: gets what is exported in this shell, not only the server's" {
+  cat > "$TEST_TEMP_DIR/env-claude" <<STUB
+#!/bin/bash
+printf '%s' "\$ONLY_IN_THE_PANE" > "$TEST_TEMP_DIR/seen"
+cat "$FIXTURES_DIR/full_session.jsonl"
+STUB
+  chmod +x "$TEST_TEMP_DIR/env-claude"
+  export CLAUDE_ASK_BIN="$TEST_TEMP_DIR/env-claude"
+  in_tmux "send:export ONLY_IN_THE_PANE='from this shell'; $CA --popup q; echo RC=\$?\\r" 'expect:(END)' 'sleep:0.3' 'send:q' 'expect:RC=0'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_TEMP_DIR/seen")" = "from this shell" ]
+  [ -z "$(ls "$XDG_RUNTIME_DIR" | grep claude-ask-env)" ]
 }
 
 @test "popup: with no question it is a chat until /quit" {
