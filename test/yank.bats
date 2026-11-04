@@ -169,7 +169,8 @@ BLOCK2='{ print }'
 
 @test "with no clipboard command and no tmux it says there is nowhere to yank" {
   export CLAUDE_ASK_CLIPBOARD="exit 1"
-  run "$SCRIPT_PATH" --no-pager -y "question"
+  # No controlling terminal, or it would ask that one (OSC 52)
+  run setsid "$SCRIPT_PATH" --no-pager -y "question"
   [ "$status" -eq 0 ]
   [[ "$output" == *"nowhere to yank to"* ]]
 }

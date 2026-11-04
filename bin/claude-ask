@@ -44,7 +44,16 @@
 #   --demo-output       Simulate streaming with mock responses (small/medium/large) and exit
 #   --no-stream        Don't stream output; show status bar only, render markdown when complete
 #   --save-raw         Also save the raw JSON stream, as NAME.jsonl beside NAME.json
-#   --history          List saved sessions
+#   --history[=N]      List saved sessions (only the newest N)
+#   --search TEXT      List the sessions with TEXT in a question or an answer,
+#                      any case, with their --history numbers
+#   --delete ID|N      Delete a saved session, asking first
+#   --prune AGE        Delete sessions older than AGE (30d, 8w, 12h; a plain
+#                      number is days), asking first
+#   --force            Do not ask; without a terminal, needed to delete at all
+#   --claude-arg WORD  One more word for claude's command line (repeat for each,
+#                      so --claude-arg --add-dir --claude-arg ../src); -r keeps
+#                      them and says which
 #   --session [ID|N]   View a saved session by name/id or index number
 #   --debug-log[=FILE] Write debug messages to FILE
 #                      (default: ${XDG_STATE_HOME:-~/.local/state}/claude-ask/debug.log)
@@ -86,6 +95,8 @@
 #   CLAUDE_ASK_FORCE_INTERACTIVE  Chat even when stdin is not a terminal (tests)
 #   CLAUDE_ASK_FORCE_TTY  Draw as if stdout were a terminal (tests)
 #   NO_COLOR           When set and not empty, no colors
+#   CLAUDE_ASK_COLORS  truecolor, 256, 16 or none (default: from COLORTERM and TERM)
+#   CLAUDE_ASK_ARGS    Words for claude's command line, quoted as in a shell
 #   CLAUDE_ASK_COLUMNS  The terminal width the status bar is fitted to
 #                      (default: the terminal's own)
 #   CLAUDE_ASK_CLIPBOARD  Command that copies stdin, run with bash -c
@@ -131,6 +142,12 @@ SAVE_RAW=0
 DEMO_THEMES=0
 DEMO_OUTPUT=0
 SHOW_HISTORY=0
+HISTORY_LIMIT=0 # --history=N
+SEARCH_TEXT=""
+DELETE_SESSION=""
+PRUNE_AGE=""
+FORCE=0
+CLAUDE_CLI_ARGS=() # --claude-arg words
 VIEW_SESSION=""
 INTERACTIVE=0
 RESUME=0
@@ -194,7 +211,7 @@ usage() {
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --theme=* | --effort=* | --model=* | --pager=* | --session=*)
+    --theme=* | --effort=* | --model=* | --pager=* | --session=* | --search=* | --delete=* | --prune=* | --claude-arg=*)
       set -- "${1%%=*}" "${1#*=}" "${@:2}"
       continue
       ;;
@@ -310,6 +327,52 @@ while [[ $# -gt 0 ]]; do
       SHOW_HISTORY=1
       shift
       ;;
+    --history=*)
+      SHOW_HISTORY=1
+      HISTORY_LIMIT="${1#--history=}"
+      if [[ ! "$HISTORY_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: --history= takes a number from 1" >&2
+        exit 1
+      fi
+      shift
+      ;;
+    --search)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "Error: --search requires an argument" >&2
+        exit 1
+      fi
+      SHOW_HISTORY=1
+      SEARCH_TEXT="$2"
+      shift 2
+      ;;
+    --delete)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "Error: --delete requires a session name or number" >&2
+        exit 1
+      fi
+      DELETE_SESSION="$2"
+      shift 2
+      ;;
+    --prune)
+      if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+[hdw]?$ ]]; then
+        echo "Error: --prune takes an age: 30d, 8w, 12h, or a number of days" >&2
+        exit 1
+      fi
+      PRUNE_AGE="$2"
+      shift 2
+      ;;
+    --force)
+      FORCE=1
+      shift
+      ;;
+    --claude-arg)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --claude-arg requires an argument" >&2
+        exit 1
+      fi
+      CLAUDE_CLI_ARGS+=("$2")
+      shift 2
+      ;;
     --session)
       if [[ $# -ge 2 && -n "$2" && ! "$2" =~ ^- ]]; then
         VIEW_SESSION="$2"
@@ -368,6 +431,32 @@ if [[ -n "$EFFORT" && ! "$EFFORT" =~ $EFFORT_RE ]]; then
   echo "Error: effort must be one of: $EFFORT_LEVELS" >&2
   exit 1
 fi
+
+# The words for claude's command line: CLAUDE_ASK_ARGS, split with its shell
+# quoting (xargs, so nothing in it runs), then each --claude-arg. What
+# claude-ask itself sets or reads the output of cannot be given here.
+CLAUDE_ARGS=()
+if [[ "${CLAUDE_ASK_ARGS:-}" =~ [^[:space:]] ]]; then
+  if ! xargs printf '%s\0' <<< "$CLAUDE_ASK_ARGS" > /dev/null 2>&1; then
+    echo "Error: CLAUDE_ASK_ARGS has unmatched quotes" >&2
+    exit 1
+  fi
+  mapfile -d '' -t CLAUDE_ARGS < <(xargs printf '%s\0' <<< "$CLAUDE_ASK_ARGS")
+fi
+CLAUDE_ARGS+=("${CLAUDE_CLI_ARGS[@]}")
+for _word in "${CLAUDE_ARGS[@]}"; do
+  case "${_word%%=*}" in
+    -p | --print | -r | --resume | -c | --continue | --output-format | --input-format | --verbose | --include-partial-messages)
+      echo "Error: claude-ask sets $_word itself; it cannot be passed on" >&2
+      exit 1
+      ;;
+    --effort | --model)
+      echo "Error: use claude-ask's own ${_word%%=*} instead of passing it on" >&2
+      exit 1
+      ;;
+  esac
+done
+unset _word
 
 # Sessions from before 0.10.0 move once to the new default place. A failed move
 # stays usable: the old place is used, and it is tried again next time.
@@ -442,7 +531,7 @@ read_piped_input() {
 # (only a pipe or a file, so /dev/null or a socket is not waited on), and -i
 # goes on to chat on the terminal, which it refuses to do when there is none
 # rather than take lines of a pipe for questions.
-if [[ "$DEMO_THEMES" -eq 0 && "$DEMO_OUTPUT" -eq 0 && "$SHOW_HISTORY" -eq 0 && -z "$VIEW_SESSION" ]]; then
+if [[ "$DEMO_THEMES" -eq 0 && "$DEMO_OUTPUT" -eq 0 && "$SHOW_HISTORY" -eq 0 && -z "$VIEW_SESSION" && -z "$DELETE_SESSION" && -z "$PRUNE_AGE" ]]; then
   if [[ -t 0 || -n "${CLAUDE_ASK_FORCE_INTERACTIVE:-}" ]]; then
     if [[ -z "$question" ]]; then
       if [[ -n "$YANK" && "$INTERACTIVE" -eq 0 && "$RESUME" -eq 0 ]]; then
@@ -476,7 +565,7 @@ fi
 debug_log "mode: INTERACTIVE=$INTERACTIVE RESUME=$RESUME YANK=${YANK:-none} TMUX_MODE=${TMUX_MODE:-none} question_len=${#question}"
 
 if [[ -n "$TMUX_MODE" ]]; then
-  if [[ "$DEMO_THEMES" -eq 1 || "$DEMO_OUTPUT" -eq 1 || "$SHOW_HISTORY" -eq 1 || -n "$VIEW_SESSION" || "$YANK_PREVIOUS" -eq 1 ]]; then
+  if [[ "$DEMO_THEMES" -eq 1 || "$DEMO_OUTPUT" -eq 1 || "$SHOW_HISTORY" -eq 1 || -n "$VIEW_SESSION" || -n "$DELETE_SESSION" || -n "$PRUNE_AGE" || "$YANK_PREVIOUS" -eq 1 ]]; then
     echo "Error: --$TMUX_MODE runs a question or a chat" >&2
     exit 1
   fi
@@ -518,13 +607,69 @@ SEP_BUBBLE_LEFT=$'\ue0b6'  #
 SEP_BUBBLE_RIGHT=$'\ue0b4' #
 SEP_POWERLINE=$'\ue0b0'    #
 
-# NO_COLOR (no-color.org): every color variable empty; the layout stays
+# How many colors the terminal shows: CLAUDE_ASK_COLORS, else what COLORTERM and
+# TERM say. Over ssh COLORTERM is often not passed on, which only means 256.
+COLOR_DEPTH="${CLAUDE_ASK_COLORS:-}"
 if [[ -n "${NO_COLOR:-}" ]]; then
-  for _color in RST BOLD "${!FG_@}" "${!BG_@}"; do
-    printf -v "$_color" '%s' ""
-  done
-  unset _color
+  COLOR_DEPTH=none
+elif [[ -z "$COLOR_DEPTH" ]]; then
+  case "${COLORTERM:-}:${TERM:-}" in
+    truecolor:* | 24bit:*) COLOR_DEPTH=truecolor ;;
+    *:dumb) COLOR_DEPTH=none ;;
+    *:*256*) COLOR_DEPTH=256 ;;
+    *) COLOR_DEPTH=16 ;;
+  esac
 fi
+
+# recolor ESCAPE: a palette color ("\e[38;2;R;G;Bm") at COLOR_DEPTH, in OUT_COLOR
+recolor() {
+  local esc="$1" kind r g b rest index
+  rest="${esc#$'\e['}"
+  kind="${rest%%;*}" # 38 foreground, 48 background
+  rest="${rest#*;2;}"
+  r="${rest%%;*}"
+  rest="${rest#*;}"
+  g="${rest%%;*}"
+  b="${rest#*;}"
+  b="${b%m}"
+  if [[ "$COLOR_DEPTH" == 256 ]]; then
+    if ((r / 11 == g / 11 && g / 11 == b / 11)); then
+      # A grey: the finer grey ramp
+      index=$((232 + (r + g + b) * 23 / 765))
+    else
+      index=$((16 + 36 * ((r * 5 + 127) / 255) + 6 * ((g * 5 + 127) / 255) + (b * 5 + 127) / 255))
+    fi
+    OUT_COLOR=$'\e['"$kind;5;${index}m"
+  else
+    # 16 colors: which channels are strong, and bright if any is very strong
+    index=$(((b > 127) * 4 + (g > 127) * 2 + (r > 127)))
+    local base=$((kind == 38 ? 30 : 40))
+    if ((r > 199 || g > 199 || b > 199 || (index == 0 && kind == 38))); then base=$((base + 60)); fi
+    OUT_COLOR=$'\e['"$((base + index))m"
+  fi
+}
+
+case "$COLOR_DEPTH" in
+  truecolor) ;;
+  256 | 16)
+    for _color in "${!FG_@}" "${!BG_@}"; do
+      recolor "${!_color}"
+      printf -v "$_color" '%s' "$OUT_COLOR"
+    done
+    unset _color OUT_COLOR
+    ;;
+  none)
+    # no-color.org: every color variable empty; the layout stays
+    for _color in RST BOLD "${!FG_@}" "${!BG_@}"; do
+      printf -v "$_color" '%s' ""
+    done
+    unset _color
+    ;;
+  *)
+    echo "Error: CLAUDE_ASK_COLORS must be one of: truecolor, 256, 16, none" >&2
+    exit 1
+    ;;
+esac
 
 # Where the status bar and notes go. stdout, when it is a terminal; otherwise
 # stdout gets only the answer (no bar, cursor moves or colors in a file or a
@@ -1147,7 +1292,8 @@ extract_code_blocks() {
 }
 
 # Set CLIP_CMD to the command that copies stdin to the clipboard:
-# CLAUDE_ASK_CLIPBOARD, else wl-copy (Wayland), xclip or xsel (X11), pbcopy.
+# CLAUDE_ASK_CLIPBOARD, else wl-copy (Wayland), xclip or xsel (X11), pbcopy,
+# clip.exe (WSL).
 # Returns 1 when there is none.
 clipboard_cmd() {
   CLIP_CMD="${CLAUDE_ASK_CLIPBOARD:-}"
@@ -1160,13 +1306,32 @@ clipboard_cmd() {
       CLIP_CMD="xsel --clipboard --input"
     elif command -v pbcopy > /dev/null 2>&1; then
       CLIP_CMD="pbcopy"
+    elif command -v clip.exe > /dev/null 2>&1; then
+      CLIP_CMD="clip.exe" # WSL
     fi
   fi
   [[ -n "$CLIP_CMD" ]]
 }
 
+# osc52_copy TEXT: ask the terminal to set the clipboard (OSC 52), which reaches
+# the local one over ssh. Terminals limit its size, about 100000 characters at
+# the least, and do not answer, so "worked" only means it was sent. tmux does not
+# pass it on from a pane by default, which is why load-buffer -w is used there.
+osc52_copy() {
+  local encoded
+  [[ "${TERM:-}" != dumb ]] || return 1
+  { : > /dev/tty; } 2> /dev/null || return 1
+  encoded=$(printf '%s' "$1" | base64 | tr -d '\n') || return 1
+  if ((${#encoded} > 100000)); then
+    echo "claude-ask: too long for the terminal's clipboard (OSC 52)" >&2
+    return 1
+  fi
+  printf '\e]52;c;%s\a' "$encoded" > /dev/tty
+}
+
 # yank_text TEXT WHAT: copy TEXT to the clipboard and, inside tmux, a tmux
-# buffer, and say so on stderr ("yanked WHAT (N lines) to ...")
+# buffer, or failing both ask the terminal, and say so on stderr ("yanked WHAT
+# (N lines) to ...")
 yank_text() {
   local text="$1" what="$2" to=() newlines
   # The clipboard tool's output goes nowhere: xclip and wl-copy stay behind
@@ -1174,11 +1339,18 @@ yank_text() {
   if clipboard_cmd && printf '%s' "$text" | bash -c "$CLIP_CMD" > /dev/null 2>&1; then
     to+=("the clipboard")
   fi
-  if [[ -n "${TMUX:-}" ]] && printf '%s' "$text" | tmux load-buffer - > /dev/null 2>&1; then
-    to+=("a tmux buffer")
+  # -w: tmux also sends it to the outer terminal's clipboard (from tmux 3.2)
+  if [[ -n "${TMUX:-}" ]]; then
+    if printf '%s' "$text" | tmux load-buffer -w - > /dev/null 2>&1 \
+      || printf '%s' "$text" | tmux load-buffer - > /dev/null 2>&1; then
+      to+=("a tmux buffer")
+    fi
+  fi
+  if ((${#to[@]} == 0)) && osc52_copy "$text"; then
+    to+=("the terminal's clipboard")
   fi
   if ((${#to[@]} == 0)); then
-    echo "claude-ask: nowhere to yank to: no clipboard command worked (set CLAUDE_ASK_CLIPBOARD) and not in tmux" >&2
+    echo "claude-ask: nowhere to yank to: no clipboard command worked (set CLAUDE_ASK_CLIPBOARD), not in tmux, and no terminal" >&2
     return 1
   fi
   newlines="${text//[!$'\n']/}"
@@ -1355,6 +1527,7 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
       question: $question,
       model: ($init.model // null),
       model_option: (if $model_option == "" then null else $model_option end),
+      claude_args: (if ($claude_args | length) == 0 then null else $claude_args end),
       effort: (if $effort == "" then null else $effort end),
       answer: (if $shown != "" then $shown else ($res.result // null) end),
       is_error: ($res.is_error // false),
@@ -1422,7 +1595,10 @@ new_session_name() {
 # The turn records EFFORT and MODEL (the -e and -m it was asked with) as
 # effort and model_option, and the model claude reported as model.
 save_session() {
-  local raw="$1" question="$2" file="${3:-}" name prev tmp
+  local raw="$1" question="$2" file="${3:-}" name prev tmp args_json="[]"
+  if ((${#CLAUDE_ARGS[@]})); then
+    args_json=$(printf '%s\0' "${CLAUDE_ARGS[@]}" | jq -Rs 'split("\u0000")[:-1]')
+  fi
   if [[ -n "$file" && -f "$file" ]]; then
     name=$(basename "$file" .json)
     prev="$file"
@@ -1440,6 +1616,7 @@ save_session() {
     umask 077
     jq -nR --arg question "$question" --arg name "$name" --slurpfile prev "$prev" \
       --arg effort "${EFFORT:-}" --arg model_option "${MODEL:-}" \
+      --argjson claude_args "$args_json" \
       "$SESSION_JQ" "$raw" > "$tmp"
   ); then
     mv -f "$tmp" "$file"
@@ -1849,6 +2026,26 @@ fit_column() {
   printf -v "$1" '%s%*s' "$_t" "$((_width - columns))" ""
 }
 
+# search_sessions TEXT FILE...: the files (NUL-terminated) with TEXT in a
+# question or an answer, in any case. One jq for all of them; as in
+# history_records, a file that is not JSON stops it, so then one each.
+# shellcheck disable=SC2016 # jq program
+SEARCH_JQ="${SESSION_TURNS_JQ}"'
+  inputs
+  | input_filename as $file
+  | select(any(turns_of[]; ((.question // "") + "\n" + (.answer // ""))
+               | ascii_downcase | contains($text | ascii_downcase)))
+  | $file + "\u0000"'
+search_sessions() {
+  local text="$1" f
+  shift
+  if ! jq -n -j --arg text "$text" "$SEARCH_JQ" "$@" 2> /dev/null; then
+    for f in "$@"; do
+      jq -n -j --arg text "$text" "$SEARCH_JQ" "$f" 2> /dev/null || true
+    done
+  fi
+}
+
 show_history() {
   local session_dir="$1"
   local files=() f
@@ -1860,6 +2057,17 @@ show_history() {
   if [[ ${#files[@]} -eq 0 ]]; then
     echo "No saved sessions." >&2
     return 1
+  fi
+
+  # With --search: only the files it finds, keeping --history's numbers
+  local -A found=()
+  local shown=0
+  if [[ -n "$SEARCH_TEXT" ]]; then
+    while IFS= read -r -d '' f; do found["$f"]=1; done < <(search_sessions "$SEARCH_TEXT" "${files[@]}")
+    if ((${#found[@]} == 0)); then
+      echo "No saved session has \"$SEARCH_TEXT\"." >&2
+      return 1
+    fi
   fi
 
   history_records "${files[@]}"
@@ -1882,6 +2090,12 @@ show_history() {
   fi
   printf -v now '%(%s)T' -1
   for ((i = 0; i + 4 < ${#HISTORY_RECORDS[@]}; i += 5)); do
+    if [[ -n "$SEARCH_TEXT" && -z "${found[${HISTORY_RECORDS[i]}]:-}" ]]; then
+      idx=$((idx + 1))
+      continue
+    fi
+    if ((HISTORY_LIMIT > 0 && shown >= HISTORY_LIMIT)); then break; fi
+    shown=$((shown + 1))
     name="${HISTORY_RECORDS[i]##*/}"
     name="${name%.json}"
     epoch="${HISTORY_RECORDS[i + 1]}"
@@ -1974,6 +2188,68 @@ view_session() {
   show_turns "$session_file" all
 }
 
+# delete_files FILE...: delete sessions (each with its .jsonl), after listing
+# them and asking at a terminal. Without one it needs --force, so a script
+# cannot delete by accident. Returns 1 when nothing was deleted.
+delete_files() {
+  local f count=$# answer
+  for f in "$@"; do
+    printf '  %s\n' "$(basename "$f" .json)" >&2
+  done
+  if ((!FORCE)); then
+    if [[ ! -t 0 ]]; then
+      echo "claude-ask: not deleting without a terminal to ask at (--force to do it)" >&2
+      return 1
+    fi
+    read -r -p "Delete $count saved session$( ((count == 1)) || printf s)? [y/N] " answer || answer=""
+    if [[ ! "$answer" =~ ^[yY]([eE][sS])?$ ]]; then
+      echo "Nothing deleted." >&2
+      return 1
+    fi
+  fi
+  for f in "$@"; do
+    rm -f "$f" "${f%.json}.jsonl"
+  done
+  printf 'Deleted %d saved session%s.\n' "$count" "$( ((count == 1)) || printf s)" >&2
+}
+
+# delete_session ID|N: delete the session that names
+delete_session() {
+  local rc=0
+  find_session "$1" || rc=$?
+  if ((rc == 1)); then echo "claude-ask: no session $1 (--history lists them)" >&2; fi
+  if ((rc != 0)); then return 1; fi
+  delete_files "$FOUND_SESSION"
+}
+
+# prune_sessions AGE: delete the sessions last used longer ago than AGE. The
+# timestamp saved in each decides; one with none is kept.
+prune_sessions() {
+  local age="$1" seconds now f i old=() files=()
+  case "$age" in
+    *h) seconds=$((${age%h} * 3600)) ;;
+    *w) seconds=$((${age%w} * 604800)) ;;
+    *) seconds=$((${age%d} * 86400)) ;;
+  esac
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && files+=("$f")
+  done < <(ls -t "$SESSION_DIR"/*.json 2> /dev/null)
+  if ((${#files[@]} > 0)); then
+    history_records "${files[@]}"
+    printf -v now '%(%s)T' -1
+    for ((i = 0; i + 4 < ${#HISTORY_RECORDS[@]}; i += 5)); do
+      if [[ "${HISTORY_RECORDS[i + 1]}" =~ ^[0-9]+$ ]] && ((now - HISTORY_RECORDS[i + 1] > seconds)); then
+        old+=("${HISTORY_RECORDS[i]}")
+      fi
+    done
+  fi
+  if ((${#old[@]} == 0)); then
+    echo "No saved session is older than $age." >&2
+    return 0
+  fi
+  delete_files "${old[@]}"
+}
+
 # show_turns FILE all|last: replay a session's turns (question, status bar,
 # answer through the pager)
 show_turns() {
@@ -2038,6 +2314,15 @@ show_turn() {
   fi
   printf '\n'
 }
+
+if [[ -n "$DELETE_SESSION" ]]; then
+  delete_session "$DELETE_SESSION"
+  exit
+fi
+if [[ -n "$PRUNE_AGE" ]]; then
+  prune_sessions "$PRUNE_AGE"
+  exit
+fi
 
 if [[ "$SHOW_HISTORY" -eq 1 ]]; then
   mkdir -p "$SESSION_DIR"
@@ -2334,6 +2619,7 @@ ask_once() {
   fi
   if [[ -n "$EFFORT" ]]; then claude_args+=(--effort "$EFFORT"); fi
   if [[ -n "$MODEL" ]]; then claude_args+=(--model "$MODEL"); fi
+  claude_args+=("${CLAUDE_ARGS[@]}")
 
   : > "$RAW_JSON"
   : > "$CLAUDE_STDERR"
@@ -2482,6 +2768,8 @@ launch_in_tmux() {
   if [[ "$STREAM_OUTPUT" -eq 0 ]]; then child+=(--no-stream); fi
   if [[ "$SAVE_RAW" -eq 1 ]]; then child+=(--save-raw); fi
   if [[ -n "$DEBUG_LOG" ]]; then child+=("--debug-log=$DEBUG_LOG"); fi
+  # CLAUDE_ASK_ARGS goes in the environment file, so only these
+  for var in "${CLAUDE_CLI_ARGS[@]}"; do child+=(--claude-arg "$var"); done
   if [[ -n "$RESUME_ARG" ]]; then
     child+=("--resume=$RESUME_ARG")
   elif [[ "$RESUME" -eq 1 ]]; then
@@ -2568,7 +2856,7 @@ resume_session() {
     (turns_of | last) as $last
     | [(.session_id // ""), (turns_of | length), (.cost_usd // ""), (.cwd // ""),
        ($last.effort // ""), ($last.model_option // ""), ($last.answer // ""),
-       ($last.model // .model // "")]
+       ($last.model // .model // ""), ($last.claude_args // [] | tojson)]
     | map(tostring | clean + "\u0000") | add' "$file")
   if [[ -z "${fields[0]:-}" ]]; then
     echo "claude-ask: $(basename "$file" .json) has no session id and cannot be resumed" >&2
@@ -2586,6 +2874,13 @@ resume_session() {
   if [[ -z "$MODEL" && -n "${fields[5]:-}" ]]; then
     MODEL="${fields[5]}"
     MODEL_RESTORED=1
+  fi
+  # As for the model, what is given now wins; if not, say what is back in effect,
+  # since it can be what a tool is allowed to do
+  if ((${#CLAUDE_ARGS[@]} == 0)) && [[ "${fields[8]:-[]}" != "[]" ]]; then
+    mapfile -d '' -t CLAUDE_ARGS < <(jq -j 'map(. + "\u0000") | add // ""' <<< "${fields[8]}")
+    printf -v header '%q ' "${CLAUDE_ARGS[@]}"
+    printf 'claude-ask: from the session, passing on to claude: %s\n' "${header% }" >&2
   fi
   debug_log "resuming $file: session_id=$CONV_SESSION_ID turns=$CONV_TURNS effort=${EFFORT:-default} model=${MODEL:-default}"
 
@@ -2641,7 +2936,8 @@ chat_status() {
   chat_note "session: $conv
 model:   ${MODEL:-default}${model:+ (last answer: $model)}
 effort:  ${EFFORT:-default}
-theme:   $THEME"
+theme:   $THEME${CLAUDE_ARGS[*]:+
+passed to claude: ${CLAUDE_ARGS[*]}}"
 }
 
 # chat_command LINE: run a slash command typed at the chat prompt. Returns 0

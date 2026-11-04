@@ -28,7 +28,8 @@ common_setup() {
   # that never ends, which a question would wait on
   export CLAUDE_ASK_FORCE_TTY=1
   # VISUAL comes before the EDITOR a test sets, and would open the real editor
-  unset NO_COLOR VISUAL
+  unset NO_COLOR VISUAL CLAUDE_ASK_COLORS CLAUDE_ASK_ARGS
+  export COLORTERM=truecolor
   exec < /dev/null
   # Never the real tmux session the suite may run in, nor the clipboard
   unset TMUX TMUX_PANE CLAUDE_STUB_TMUX_LOG CLAUDE_STUB_TMUX_SIZE CLAUDE_STUB_TMUX_BUFFER

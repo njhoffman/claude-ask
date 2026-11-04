@@ -24,6 +24,8 @@ claude-ask --split "..."                 # answer in a new tmux pane
 claude-ask --popup                       # chat in a tmux popup
 claude-ask --history                     # saved sessions
 claude-ask --session 1                   # replay the newest one
+claude-ask --search rebase               # sessions mentioning it, in any case
+claude-ask --prune 30d                   # delete old sessions, asking first
 claude-ask --version                     # print the version
 claude-ask --help                        # every option
 ```
@@ -63,6 +65,30 @@ In a terminal too narrow for the whole status bar, segments are left out
 from the right (done, duration, cost, tokens); `CLAUDE_ASK_COLUMNS` sets the
 width it is fitted to.
 
+## Saved sessions
+
+`--history=N` lists the newest N. `--search TEXT` lists those with TEXT in a
+question or an answer, in any case and taken literally, with their `--history`
+numbers, so `--session N` opens one. `--delete ID|N` and `--prune AGE` (`30d`,
+`8w`, `12h`; a plain number is days, counted from the session's saved time) list
+what they would remove and ask first. Deleted sessions cannot be recovered. With
+no terminal to ask at they refuse unless given `--force`.
+
+## Passing options to claude
+
+`--claude-arg WORD`, once per word, or `CLAUDE_ASK_ARGS` with shell-style quoting,
+add to `claude`'s command line:
+
+```sh
+claude-ask --claude-arg --add-dir --claude-arg ../src "Compare them"
+export CLAUDE_ASK_ARGS="--append-system-prompt 'Be brief.'"
+```
+
+They are saved with the session, and `-r` uses them again and says which, since
+they can decide what tools may do; words given to that `-r` replace them. What
+claude-ask sets itself (`-p`, `--output-format`, `--resume` and so on) is refused,
+and `--effort` and `--model` have their own options.
+
 ## Streaming
 
 With `--no-pager`, or when stdout is a file or pipe, text appears word by word.
@@ -83,6 +109,9 @@ taking each line for a question.
 When stdout is not a terminal it gets only the answer: no status bar, cursor
 moves, colors or default pager (a `--pager` you give still runs). The status bar
 goes to stderr if that is a terminal. `NO_COLOR` turns off colors everywhere.
+Colors follow `COLORTERM` and `TERM` (24-bit, 256 or 16); `CLAUDE_ASK_COLORS` is
+`truecolor`, `256`, `16` or `none`, for a terminal that says otherwise, as over
+ssh, where `COLORTERM` is often not passed on.
 
 Control characters in answers and questions, other than tab and newline, are
 removed before they are shown or copied, so an escape sequence in something a
@@ -132,7 +161,10 @@ every turn, in one pager when there are several.
 them) and `--yank-code=N` only block N. They go to the clipboard (wl-copy on
 Wayland, xclip or xsel on X11, pbcopy on macOS; `CLAUDE_ASK_CLIPBOARD` is a
 command run with `bash -c` that reads the text on stdin) and, inside tmux, to
-a tmux buffer (`prefix ]` pastes it). With a question they copy the new
+a tmux buffer (`prefix ]` pastes it), which tmux also sends to the outer
+terminal's clipboard. With no clipboard command and no tmux, as over ssh, the
+terminal is asked with OSC 52: terminals do not answer, so check yours allows it.
+WSL's `clip.exe` is used too. With a question they copy the new
 answer; with no question they copy the newest session's last answer (or the
 one `--session ID|N` names) and exit. `-i -y` copies every answer in a chat.
 

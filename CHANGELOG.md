@@ -6,6 +6,28 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-03
+
+### Added
+
+- `--search TEXT` lists sessions with TEXT in a question or an answer, keeping
+  their `--history` numbers, and `--history=N` lists the newest N.
+- `--delete ID|N` and `--prune AGE` delete sessions. Both list what they would
+  remove and ask first; with no terminal they need `--force`.
+- `--claude-arg WORD` and `CLAUDE_ASK_ARGS` pass options on to `claude`. They are
+  saved with the session, and `-r` uses them again and says which.
+- Yanking with no clipboard command and no tmux asks the terminal (OSC 52), which
+  reaches the local clipboard over ssh; `clip.exe` is used on WSL.
+- `CLAUDE_ASK_COLORS` chooses `truecolor`, `256`, `16` or `none`.
+
+### Changed
+
+- Colors follow `COLORTERM` and `TERM`: a terminal not known to take 24-bit color
+  gets 256 or 16 colors. Over ssh, where `COLORTERM` is often not passed on, that
+  can mean 256; set `CLAUDE_ASK_COLORS=truecolor` to keep 24-bit.
+- Inside tmux a yank uses `load-buffer -w`, so tmux also sends it to the outer
+  terminal's clipboard.
+
 ## [0.11.0] - 2026-11-03
 
 ### Changed

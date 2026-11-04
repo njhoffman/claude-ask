@@ -66,7 +66,7 @@ help_options() {
   [[ " ${COMPREPLY[*]} " == *" git-bisect "* ]]
   # An option after --session (it takes an optional argument)
   comp --session --hi
-  [ "${COMPREPLY[*]}" = "--history" ]
+  [ "${COMPREPLY[*]}" = "--history --history=" ]
 }
 
 @test "bash: --resume= completes session names after the =" {

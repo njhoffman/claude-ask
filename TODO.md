@@ -6,47 +6,6 @@ normal or `(p3)` low, and a category: `[bug]`, `[feature]`, `[refactor]`,
 
 Reviewed: 2026-11-03
 
-## 4. Sessions and chat history
-
-- [x] **Script source lines end up in the chat history.** (p2) [bug]
-  `chat_loop` runs `set -o history` and never turns it off, so bash records
-  the rest of the script as it reads it: after a chat the history file ends
-  with `if [[ "$LAST_TURN_STATUS" -ne 0 ]]; then exit 1; fi` and `exit 0`, and
-  the up arrow offers them. Run `set +o history` when the chat ends, add a test,
-  and remove the lines already in `~/.local/state/claude-ask/history`.
-- [x] **Session files are readable by other users.** (p2) [bug] Sessions hold
-  questions, piped diffs and answers, but are created with the umask (`0664`
-  here, in a `0775` directory), unlike the chat history (`0600`). Create the
-  directory `0700` and the files `0600` (`umask 077` around `save_session`,
-  including `--save-raw`), and tighten existing ones when they are next written.
-- [x] **A corrupt session file gives a poor error.** (p3) [bug]
-  `--session bad` prints jq's parse error and exits 0; `--resume=bad` says "has
-  no session id and cannot be resumed". Check that the file parses and report
-  "NAME is not a valid session file", exit 1.
-- [x] **`--session` opens the pager once per turn.** (p3) [bug] `show_turn` runs
-  the pager for each turn, so a 3-turn session runs it 3 times (counted) and
-  with the default `nvcat --pager less` needs `q` once per turn. Render all
-  turns as one document for one pager.
-- [x] **Multi-line questions come back split from the history file.** (p3) [bug]
-  A pasted question is one entry during the chat, but the file holds its lines
-  separately, so next time each is its own up-arrow entry. Bash has no format
-  for this without timestamps: `HISTTIMEFORMAT` with `lithist`, or store them
-  joined.
-- [x] **The session directory ignores `XDG_DATA_HOME`.** (p3) [bug] `STATE_DIR`
-  honors `XDG_STATE_HOME`, but `SESSION_DIR` is always under
-  `~/.local/share/claude/`, inside a directory named after another tool. Use
-  `${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions`, falling back to the old
-  place when it holds sessions; the completion files glob it too.
-- [ ] **Search and prune sessions.** (p3) [feature] Sessions pile up with no way
-  to find or remove them: `--history` lists all of them. Add a limit
-  (`--history=N`), a search over questions and answers, and `--delete ID|N` or
-  an age-based prune.
-- [x] **`--history` does not fit the terminal.** (p3) [bug] The table has fixed
-  widths of about 90 columns, wrapping in a narrow pane, and counts characters,
-  so 39 double-width characters take 78 columns and push the row out of line.
-  Use `TERM_COLS` and display width; `disp_name` also hides what makes long names
-  differ.
-
 ## 5. Options and tmux
 
 - [x] **`--split` and `--popup` lose the shell's environment.** (p3) [bug]
@@ -64,12 +23,12 @@ Reviewed: 2026-11-03
   "Unknown option", though `--split=`, `--resume=` and `--debug-log=` take that
   form. Accept `=` for every option with a value and split bundled short flags,
   and add them to both completion files.
-- [ ] **Pass options through to `claude`.** (p3) [feature] Nothing reaches
+- [x] **Pass options through to `claude`.** (p3) [feature] Nothing reaches
   `claude` except `--effort`, `--model` and `--resume`, so a chat cannot use
   `--allowedTools`, `--permission-mode`, `--add-dir` or
   `--append-system-prompt`. Add `CLAUDE_ASK_ARGS` or a repeatable
   `--claude-arg`, saved with the session so `-r` keeps it.
-- [ ] **Yank over ssh with OSC 52.** (p3) [feature] Over ssh with no `DISPLAY`
+- [x] **Yank over ssh with OSC 52.** (p3) [feature] Over ssh with no `DISPLAY`
   there is no clipboard command, so outside tmux `-y` fails. Fall back to the
   OSC 52 escape, which most terminals and tmux pass to the local clipboard, and
   add `clip.exe` for WSL.
@@ -97,7 +56,7 @@ Reviewed: 2026-11-03
   Two lines typed while an answer streams are waiting at the next prompt, so
   they look like a paste. Flushing typed-ahead input before the prompt would
   fix it, at the cost of losing a line typed ahead on purpose.
-- [ ] **No colors but truecolor.** (p3) [feature] Since 0.9.0 `NO_COLOR` is
+- [x] **No colors but truecolor.** (p3) [feature] Since 0.9.0 `NO_COLOR` is
   honored, but the palette is 24-bit only, which a 256-color terminal shows
   wrongly. Fall back on `COLORTERM`.
 - [ ] **Test older tool versions in CI.** (p3) [chore] jq 1.7 already broke
@@ -128,6 +87,47 @@ Reviewed: 2026-11-03
   `_CLAUDE_ASK_STARTED` block instead of the code it describes.
 
 ## Completed
+
+### 4. Sessions and chat history (completed 2026-11-03)
+
+- [x] **Script source lines end up in the chat history.** (p2) [bug]
+  `chat_loop` runs `set -o history` and never turns it off, so bash records
+  the rest of the script as it reads it: after a chat the history file ends
+  with `if [[ "$LAST_TURN_STATUS" -ne 0 ]]; then exit 1; fi` and `exit 0`, and
+  the up arrow offers them. Run `set +o history` when the chat ends, add a test,
+  and remove the lines already in `~/.local/state/claude-ask/history`.
+- [x] **Session files are readable by other users.** (p2) [bug] Sessions hold
+  questions, piped diffs and answers, but are created with the umask (`0664`
+  here, in a `0775` directory), unlike the chat history (`0600`). Create the
+  directory `0700` and the files `0600` (`umask 077` around `save_session`,
+  including `--save-raw`), and tighten existing ones when they are next written.
+- [x] **A corrupt session file gives a poor error.** (p3) [bug]
+  `--session bad` prints jq's parse error and exits 0; `--resume=bad` says "has
+  no session id and cannot be resumed". Check that the file parses and report
+  "NAME is not a valid session file", exit 1.
+- [x] **`--session` opens the pager once per turn.** (p3) [bug] `show_turn` runs
+  the pager for each turn, so a 3-turn session runs it 3 times (counted) and
+  with the default `nvcat --pager less` needs `q` once per turn. Render all
+  turns as one document for one pager.
+- [x] **Multi-line questions come back split from the history file.** (p3) [bug]
+  A pasted question is one entry during the chat, but the file holds its lines
+  separately, so next time each is its own up-arrow entry. Bash has no format
+  for this without timestamps: `HISTTIMEFORMAT` with `lithist`, or store them
+  joined.
+- [x] **The session directory ignores `XDG_DATA_HOME`.** (p3) [bug] `STATE_DIR`
+  honors `XDG_STATE_HOME`, but `SESSION_DIR` is always under
+  `~/.local/share/claude/`, inside a directory named after another tool. Use
+  `${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions`, falling back to the old
+  place when it holds sessions; the completion files glob it too.
+- [x] **Search and prune sessions.** (p3) [feature] Sessions pile up with no way
+  to find or remove them: `--history` lists all of them. Add a limit
+  (`--history=N`), a search over questions and answers, and `--delete ID|N` or
+  an age-based prune.
+- [x] **`--history` does not fit the terminal.** (p3) [bug] The table has fixed
+  widths of about 90 columns, wrapping in a narrow pane, and counts characters,
+  so 39 double-width characters take 78 columns and push the row out of line.
+  Use `TERM_COLS` and display width; `disp_name` also hides what makes long names
+  differ.
 
 ### 3. Input and output (completed 2026-11-03)
 

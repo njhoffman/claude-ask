@@ -37,7 +37,12 @@ _claude-ask() {
     '--demo-output[simulate streamed answers and exit]' \
     '--no-stream[show the answer when it is complete]' \
     '--save-raw[also save the raw JSON stream]' \
-    '--history[list saved sessions]' \
+    '--history=-[list saved sessions (only the newest N)]::number: ' \
+    '--search=[list sessions with this text]:text: ' \
+    '--delete=[delete a saved session]:session:_claude-ask_sessions' \
+    '--prune=[delete sessions older than this]:age (30d, 8w, 12h): ' \
+    '--force[do not ask before deleting]' \
+    '*--claude-arg=[one more word for the claude command line]:word: ' \
     '--session=[view a saved session]::session:_claude-ask_sessions' \
     '--debug-log=-[write debug messages to a file]::file:_files' \
     '(- *)--version[print the version and exit]' \

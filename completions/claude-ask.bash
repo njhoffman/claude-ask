@@ -5,7 +5,8 @@
 _claude_ask_options="-i --interactive -r --resume --resume= -e --effort --effort=
   -m --model --model= -y --yank -Y --yank-code --yank-code= --split --split= --popup
   --theme --theme= --pager --pager= --no-pager --demo-themes --demo-output --no-stream
-  --save-raw --history --session --session= --debug-log --debug-log= --version -h --help"
+  --save-raw --history --history= --session --session= --search --search= --delete --delete=
+  --prune --prune= --force --claude-arg --claude-arg= --debug-log --debug-log= --version -h --help"
 
 # Saved session names (for --session and --resume=)
 _claude_ask_sessions() {
@@ -46,7 +47,7 @@ _claude_ask() {
   fi
   if [[ -n "$opt" ]]; then
     case "$opt" in
-      --resume | --session)
+      --resume | --session | --delete)
         mapfile -t names < <(_claude_ask_sessions)
         _claude_ask_reply "$cur" "${names[@]}"
         ;;
@@ -78,7 +79,7 @@ _claude_ask() {
       mapfile -t COMPREPLY < <(compgen -c -- "$cur")
       return 0
       ;;
-    --session)
+    --session | --delete)
       if [[ "$cur" != -* ]]; then
         mapfile -t names < <(_claude_ask_sessions)
         _claude_ask_reply "$cur" "${names[@]}"

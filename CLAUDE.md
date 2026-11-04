@@ -76,7 +76,8 @@ through a pager with a themed status bar redrawn just below the streamed text
   becomes `api_error`; on `model_not_found` `ask_once` saves nothing and
   falls back to `MODEL_GOOD` (retrying once when `MODEL_RESTORED`).
 - **Yank**: `extract_code_blocks` (fills `CODE_BLOCKS`), `yank_answer`,
-  `yank_text` (clipboard via `clipboard_cmd`, plus `tmux load-buffer`).
+  `yank_text` (clipboard via `clipboard_cmd`, plus `tmux load-buffer -w`, else
+  `osc52_copy` to `/dev/tty`; tests use `setsid` to have no terminal).
   `LAST_ANSWER` is the result text of the last turn (or the session's last
   answer after `-r`). `YANK_PREVIOUS`: `-y`/`-Y` with no question.
 - **tmux**: `launch_in_tmux` re-runs the script with `split-window` or
@@ -126,6 +127,16 @@ through a pager with a themed status bar redrawn just below the streamed text
   SIGINT; it is restarted if it dies. `save_session` writes session files.
 - **Chat history**: read `-e` stops at a newline, so a multi-line question is held
   on one line with `CHAT_NEWLINE_MARK` (`⏎`), turned back on submit.
+- **Saved sessions**: `search_sessions` (`--search`), `delete_files` (asks at a
+  terminal, or `--force`), `delete_session` and `prune_sessions`, which goes by
+  the saved timestamp, so a session with none is kept.
+- **Passed to claude**: `CLAUDE_ARGS` is `CLAUDE_ASK_ARGS` (split with `xargs`, so
+  nothing runs) plus `CLAUDE_CLI_ARGS` (`--claude-arg`). Each turn saves
+  `claude_args`; `resume_session` restores them when none are given, and says so.
+  They go last on the command line, and what claude-ask sets itself is refused.
+- **Colors**: the palette is written in 24-bit; `COLOR_DEPTH` (from
+  `CLAUDE_ASK_COLORS`, `NO_COLOR`, `COLORTERM`, `TERM`) makes `recolor` rewrite
+  the variables. `common_setup` sets `COLORTERM=truecolor`.
 - **History**: `fit_column` and `display_width` do the columns;
   `history_records` reads all session files with one `jq`
   (`HISTORY_JQ`), falling back to one per file when one is not JSON;
