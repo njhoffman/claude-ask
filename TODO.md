@@ -47,8 +47,6 @@ Reviewed: 2026-11-03
 - [x] **`bc` is only used by one test.** (p3) [chore] The script stopped needing
   it, but `test/mock_stream.bats:81` still calls it, so CI installs it. Compare
   with `awk` or `jq` and drop it from `ci.yml`.
-- [ ] **No license.** (p3) [chore] The repository is public with no `LICENSE`, so
-  by default nobody else may use or change it. Add one if that is not the intent.
 - [x] **One helper for the session file list.** (p3) [refactor] `ls -t
   "$dir"/*.json` is written out in `newest_session_file`, `show_history` and
   `find_session`; the themes are listed in two regexes, `CHAT_THEMES`,

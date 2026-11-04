@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci-older-tools]
   pull_request:
 
 permissions:
@@ -10,16 +10,28 @@ permissions:
 
 jobs:
   test:
-    # The script needs bash 5 (macOS ships 3.2), so Linux only
-    runs-on: ubuntu-24.04
+    # The script needs bash 5 (macOS ships 3.2), so Linux only. 22.04 is the
+    # older tools: jq 1.6, bash 5.1, tmux 3.2a, fish 3.3
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
       # jq, shellcheck and script (util-linux) are in the runner image
-      - name: Install bats, just, zsh, fish and tmux
+      - name: Install the test tools
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q bats just zsh fish tmux
+          sudo apt-get install -y -q zsh fish tmux
+          if [[ "${{ matrix.os }}" == ubuntu-24.04 ]]; then
+            sudo apt-get install -y -q bats just
+          else
+            # apt's bats (1.2) is too old for the suite, and just is not in apt
+            git clone -q --depth 1 --branch v1.11.0 https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats"
+            sudo "$RUNNER_TEMP/bats/install.sh" /usr/local
+          fi
 
       - name: Tool versions
         run: |
@@ -27,13 +39,14 @@ jobs:
           jq --version
           shellcheck --version | sed -n 2p
           bats --version
-          just --version
           zsh --version
           tmux -V
           fish --version
 
+      # Findings differ between shellcheck versions: one is enough
       - name: Lint
+        if: matrix.os == 'ubuntu-24.04'
         run: just lint
 
       - name: Test
-        run: just test
+        run: bats test
