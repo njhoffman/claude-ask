@@ -6,6 +6,20 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-03
+
+### Added
+
+- `--completions bash|zsh|fish` prints a completion script, with fish new. It works
+  from the script alone, needing neither the repository nor `jq`.
+
+### Changed
+
+- The completion scripts are inside `bin/claude-ask`, and `completions/` is gone.
+  `just install` writes them from the script instead of linking them. Symlinks an
+  earlier install left point at nothing now: run `just install` again.
+- zsh's script can also be sourced (`source <(claude-ask --completions zsh)`).
+
 ## [0.13.0] - 2026-11-03
 
 ### Changed

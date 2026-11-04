@@ -187,16 +187,26 @@ the new run reads and deletes, so API keys stay out of the process list.
 ## Install
 
 ```sh
-just install    # symlinks bin/claude-ask into ~/.local/bin, and the completions
+just install    # symlinks bin/claude-ask into ~/.local/bin, writes the completions
 ```
 
-The shell completions (options, effort levels, models, themes, and saved
-session names for `--session` and `--resume=`) are `completions/_claude-ask`
-for zsh, linked into `~/.local/share/zsh/site-functions` (which must be in
-`fpath`; run `rm ~/.zcompdump*; compinit` once if zsh had cached its list),
-and `completions/claude-ask.bash` for bash, linked into
-`~/.local/share/bash-completion/completions` (`BASH_COMPLETION_USER_DIR`),
-where bash-completion loads it; without bash-completion, source it.
+`--completions bash`, `zsh` or `fish` prints a completion script for the options,
+effort levels, models, themes and saved session names. It needs nothing but the
+script itself:
+
+```sh
+eval "$(claude-ask --completions bash)"      # in ~/.bashrc
+source <(claude-ask --completions zsh)       # in ~/.zshrc, after compinit
+claude-ask --completions fish | source       # in config.fish
+```
+
+Or save it where your shell looks, which `just install` does: for zsh
+`~/.local/share/zsh/site-functions/_claude-ask` (that directory must be in `fpath`;
+run `rm ~/.zcompdump*; compinit` once if zsh had cached its list), for bash
+`~/.local/share/bash-completion/completions/claude-ask`
+(`BASH_COMPLETION_USER_DIR`), and for fish, if it is installed,
+`~/.config/fish/completions/claude-ask.fish`. Saved files do not change with the
+script: run `just install` again after an update, or use the lines above.
 
 ## Development
 

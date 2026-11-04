@@ -9,9 +9,8 @@ through a pager with a themed status bar redrawn just below the streamed text
 
 - `just test` (or `bats test/`) runs the suite; `bats test/<file>.bats` one file.
 - `just lint` runs shellcheck on the script.
-- `just install` symlinks `bin/claude-ask` into `~/.local/bin` and the
-  completions (`completions/_claude-ask` for zsh, `completions/claude-ask.bash`
-  for bash) where zsh and bash-completion look.
+- `just install` symlinks `bin/claude-ask` into `~/.local/bin` and writes what
+  `--completions` prints where zsh, bash-completion and fish look.
 
 ## Architecture
 
@@ -168,12 +167,14 @@ through a pager with a themed status bar redrawn just below the streamed text
   `test/stubs/claude`, which replays `CLAUDE_STUB_FIXTURE`; test files with
   their own `setup()` must call `common_setup` first.
 - `docs/claude-ask.example.json` is a recorded stream-json session.
-- **Shell completion**: `completions/`; they glob `SESSION_DIR` for session
-  names themselves. `test/completion.bats` calls the bash function, runs
-  the zsh file with `_arguments` stubbed, and checks both cover every
-  option in `--help`, so a new option needs adding to both.
+- **Shell completion**: `print_completions` holds all three scripts as heredocs,
+  so a copy of the script alone can print them. It runs while the options are
+  parsed, before `jq` is required. They find session names themselves.
+  `test/completion.bats` calls the bash function, runs the zsh one with `_arguments`
+  stubbed, asks real fish with `complete -C`, and checks all three cover every option
+  in `--help`, so a new option needs adding to all three.
 - CI: `.github/workflows/ci.yml` runs `just lint` and `just test` on
-  Ubuntu 24.04 (bats, just, bc and zsh from apt).
+  Ubuntu 24.04 (bats, just, bc, zsh, fish and tmux from apt).
 
 ## Versioning
 

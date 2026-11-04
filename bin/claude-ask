@@ -57,6 +57,10 @@
 #   --session [ID|N]   View a saved session by name/id or index number
 #   --debug-log[=FILE] Write debug messages to FILE
 #                      (default: ${XDG_STATE_HOME:-~/.local/state}/claude-ask/debug.log)
+#   --completions SHELL  Print the completion script for bash, zsh or fish:
+#                      eval "$(claude-ask --completions bash)",
+#                      source <(claude-ask --completions zsh),
+#                      claude-ask --completions fish | source
 #   --version          Print the version and exit
 #   -h, --help         Show this help message
 #
@@ -218,10 +222,249 @@ usage() {
   exit 0
 }
 
+# print_completions SHELL: the completion script for SHELL. They are all here,
+# so a script copied on its own can still print them. test/completion.bats runs
+# each against its real shell; a new option needs adding to all three.
+print_completions() {
+  case "$1" in
+    bash)
+      cat << 'CLAUDE_ASK_COMPLETION'
+# bash completion for claude-ask: eval "$(claude-ask --completions bash)", or
+# save it as ${XDG_DATA_HOME:-~/.local/share}/bash-completion/completions/claude-ask
+
+_claude_ask_options="-i --interactive -r --resume --resume= -e --effort --effort=
+  -m --model --model= -y --yank -Y --yank-code --yank-code= --split --split= --popup
+  --theme --theme= --pager --pager= --no-pager --demo-themes --demo-output --no-stream
+  --save-raw --history --history= --session --session= --search --search= --delete --delete=
+  --prune --prune= --force --claude-arg --claude-arg= --debug-log --debug-log= --completions --completions=
+  --version -h --help"
+
+# Saved session names (for --session and --resume=)
+_claude_ask_sessions() {
+  local dir="${SESSION_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/claude-ask/sessions}" f name
+  for f in "$dir"/*.json; do
+    [[ -e "$f" ]] || continue
+    name="${f##*/}"
+    printf '%s\n' "${name%.json}"
+  done
+}
+
+# _claude_ask_reply WORD CANDIDATE...: COMPREPLY from the candidates that
+# start with WORD
+_claude_ask_reply() {
+  local word="$1" c
+  shift
+  COMPREPLY=()
+  for c in "$@"; do
+    if [[ "$c" == "$word"* ]]; then COMPREPLY+=("$c"); fi
+  done
+}
+
+_claude_ask() {
+  local cur="${COMP_WORDS[COMP_CWORD]}" prev="" opt=""
+  local -a names
+  if ((COMP_CWORD > 0)); then prev="${COMP_WORDS[COMP_CWORD - 1]}"; fi
+
+  # bash splits --opt=value at the = (COMP_WORDBREAKS): "--opt" "=" "value"
+  if [[ "$cur" == "=" ]]; then
+    opt="$prev"
+    cur=""
+  elif [[ "$prev" == "=" ]] && ((COMP_CWORD > 1)); then
+    opt="${COMP_WORDS[COMP_CWORD - 2]}"
+  elif [[ "$cur" == --*=* ]]; then
+    # COMP_WORDBREAKS without =
+    opt="${cur%%=*}"
+    cur="${cur#*=}"
+  fi
+  if [[ -n "$opt" ]]; then
+    case "$opt" in
+      --resume | --session | --delete)
+        mapfile -t names < <(_claude_ask_sessions)
+        _claude_ask_reply "$cur" "${names[@]}"
+        ;;
+      --split) _claude_ask_reply "$cur" h v auto ;;
+      --completions) _claude_ask_reply "$cur" bash zsh fish ;;
+      --effort) _claude_ask_reply "$cur" low medium high xhigh max ;;
+      --model) _claude_ask_reply "$cur" opus sonnet haiku fable ;;
+      --theme) _claude_ask_reply "$cur" minimal bubbles powerline ;;
+      --pager) mapfile -t COMPREPLY < <(compgen -c -- "$cur") ;;
+      --debug-log) mapfile -t COMPREPLY < <(compgen -f -- "$cur") ;;
+      *) COMPREPLY=() ;;
+    esac
+    return 0
+  fi
+
+  case "$prev" in
+    -e | --effort)
+      _claude_ask_reply "$cur" low medium high xhigh max
+      return 0
+      ;;
+    -m | --model)
+      _claude_ask_reply "$cur" opus sonnet haiku fable
+      return 0
+      ;;
+    --theme)
+      _claude_ask_reply "$cur" minimal bubbles powerline
+      return 0
+      ;;
+    --completions)
+      _claude_ask_reply "$cur" bash zsh fish
+      return 0
+      ;;
+    --pager)
+      mapfile -t COMPREPLY < <(compgen -c -- "$cur")
+      return 0
+      ;;
+    --session | --delete)
+      if [[ "$cur" != -* ]]; then
+        mapfile -t names < <(_claude_ask_sessions)
+        _claude_ask_reply "$cur" "${names[@]}"
+        return 0
+      fi
+      ;;
+  esac
+
+  if [[ "$cur" == -* ]]; then
+    # shellcheck disable=SC2086 # the option list is split into words
+    _claude_ask_reply "$cur" $_claude_ask_options
+    # An option ending in = takes its value with no space after it
+    if [[ ${#COMPREPLY[@]} -eq 1 && "${COMPREPLY[0]}" == *= ]]; then
+      compopt -o nospace 2> /dev/null || true
+    fi
+  else
+    # The question
+    COMPREPLY=()
+  fi
+  return 0
+}
+
+complete -F _claude_ask claude-ask
+CLAUDE_ASK_COMPLETION
+      ;;
+    zsh)
+      cat << 'CLAUDE_ASK_COMPLETION'
+#compdef claude-ask
+# zsh completion for claude-ask: source <(claude-ask --completions zsh), or save
+# it as _claude-ask in a directory on fpath
+
+# Saved session names (for --session and --resume=), newest first, as
+# --history numbers them
+_claude-ask_sessions() {
+  local dir=${SESSION_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/claude-ask/sessions}
+  local -a files names
+  files=( $dir/*.json(N.om) )
+  names=( ${${files:t}%.json} )
+  _describe -V -t sessions 'saved session' names
+}
+
+_claude-ask() {
+  local -a efforts=(low medium high xhigh max)
+  local -a models=(opus sonnet haiku fable)
+  local -a themes=(minimal bubbles powerline)
+
+  _arguments -s -S \
+    '(-i --interactive)'{-i,--interactive}'[keep the chat open after the answer]' \
+    '(--resume)-r[continue the newest saved session]' \
+    '(-r)--resume=-[continue the newest saved session, or the one named]::session:_claude-ask_sessions' \
+    "(--effort)-e[effort (thinking) level]:level:($efforts)" \
+    "(-e)--effort=[effort (thinking) level]:level:($efforts)" \
+    "(--model)-m[model alias or full name]:model:($models)" \
+    "(-m)--model=[model alias or full name]:model:($models)" \
+    '(-y --yank -Y --yank-code)'{-y,--yank}'[copy the answer to the clipboard]' \
+    '(-y --yank --yank-code)-Y[copy the code blocks of the answer]' \
+    '(-y --yank -Y)--yank-code=-[copy the code blocks of the answer (only the Nth)]::block number: ' \
+    '(--popup)--split=-[run in a new tmux pane]::direction:((h\:side\ by\ side v\:one\ above\ the\ other auto\:from\ the\ shape\ of\ the\ pane))' \
+    '(--split)--popup[run in a tmux popup]' \
+    "--theme=[status bar theme]:theme:($themes)" \
+    '(--no-pager)--pager=[pager command, run with bash -c]:pager command:_command_names -e' \
+    '(--pager)--no-pager[print plain text, no pager]' \
+    '--demo-themes[show example status bars and exit]' \
+    '--demo-output[simulate streamed answers and exit]' \
+    '--no-stream[show the answer when it is complete]' \
+    '--save-raw[also save the raw JSON stream]' \
+    '--history=-[list saved sessions (only the newest N)]::number: ' \
+    '--search=[list sessions with this text]:text: ' \
+    '--delete=[delete a saved session]:session:_claude-ask_sessions' \
+    '--prune=[delete sessions older than this]:age (30d, 8w, 12h): ' \
+    '--force[do not ask before deleting]' \
+    '*--claude-arg=[one more word for the claude command line]:word: ' \
+    '--session=[view a saved session]::session:_claude-ask_sessions' \
+    '--debug-log=-[write debug messages to a file]::file:_files' \
+    '(- *)--completions=[print a completion script and exit]:shell:(bash zsh fish)' \
+    '(- *)--version[print the version and exit]' \
+    '(- *)'{-h,--help}'[show the help and exit]' \
+    '*::question: '
+}
+
+# Autoloaded from fpath this file is the completion function's body; sourced, it
+# has to register the function
+if [[ "${funcstack[1]:-}" == _claude-ask ]]; then
+  _claude-ask "$@"
+else
+  compdef _claude-ask claude-ask
+fi
+CLAUDE_ASK_COMPLETION
+      ;;
+    fish)
+      cat << 'CLAUDE_ASK_COMPLETION'
+# fish completion for claude-ask: claude-ask --completions fish | source, or save
+# it as ${XDG_CONFIG_HOME:-~/.config}/fish/completions/claude-ask.fish
+
+# Saved session names (for --session, --resume and --delete), newest first, as
+# --history numbers them
+function __claude_ask_sessions
+    set -l dir $SESSION_DIR
+    if test -z "$dir"
+        set -l data $XDG_DATA_HOME
+        test -n "$data"; or set data $HOME/.local/share
+        set dir $data/claude-ask/sessions
+    end
+    command ls -t -- $dir 2>/dev/null | string match '*.json' | string replace -r '\.json$' ''
+end
+
+# The rest of the line is the question, not file names
+complete -c claude-ask -f
+
+complete -c claude-ask -s i -l interactive -d 'Keep the chat open after the answer'
+complete -c claude-ask -s r -d 'Continue the newest saved session'
+complete -c claude-ask -l resume -x -k -a '(__claude_ask_sessions)' -d 'Continue a saved session'
+complete -c claude-ask -s e -l effort -x -a 'low medium high xhigh max' -d 'Effort (thinking) level'
+complete -c claude-ask -s m -l model -x -a 'opus sonnet haiku fable' -d 'Model alias or full name'
+complete -c claude-ask -s y -l yank -d 'Copy the answer to the clipboard'
+complete -c claude-ask -s Y -l yank-code -d 'Copy the code blocks of the answer'
+complete -c claude-ask -l split -f -a 'h v auto' -d 'Run in a new tmux pane'
+complete -c claude-ask -l popup -d 'Run in a tmux popup'
+complete -c claude-ask -l theme -x -a 'minimal bubbles powerline' -d 'Status bar theme'
+complete -c claude-ask -l pager -x -a '(__fish_complete_command)' -d 'Pager command, run with bash -c'
+complete -c claude-ask -l no-pager -d 'Print plain text, no pager'
+complete -c claude-ask -l demo-themes -d 'Show example status bars and exit'
+complete -c claude-ask -l demo-output -d 'Simulate streamed answers and exit'
+complete -c claude-ask -l no-stream -d 'Show the answer when it is complete'
+complete -c claude-ask -l save-raw -d 'Also save the raw JSON stream'
+complete -c claude-ask -l history -d 'List saved sessions'
+complete -c claude-ask -l session -x -k -a '(__claude_ask_sessions)' -d 'View a saved session'
+complete -c claude-ask -l search -x -d 'List sessions with this text'
+complete -c claude-ask -l delete -x -k -a '(__claude_ask_sessions)' -d 'Delete a saved session'
+complete -c claude-ask -l prune -x -a '30d 8w 12h' -d 'Delete sessions older than this'
+complete -c claude-ask -l force -d 'Do not ask before deleting'
+complete -c claude-ask -l claude-arg -x -d 'One more word for the claude command line'
+complete -c claude-ask -l debug-log -r -F -d 'Write debug messages to a file'
+complete -c claude-ask -l completions -x -a 'bash zsh fish' -d 'Print a completion script and exit'
+complete -c claude-ask -l version -d 'Print the version and exit'
+complete -c claude-ask -s h -l help -d 'Show the help and exit'
+CLAUDE_ASK_COMPLETION
+      ;;
+    *)
+      echo "Error: --completions takes bash, zsh or fish" >&2
+      exit 1
+      ;;
+  esac
+}
+
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --theme=* | --effort=* | --model=* | --pager=* | --session=* | --search=* | --delete=* | --prune=* | --claude-arg=*)
+    --theme=* | --effort=* | --model=* | --pager=* | --session=* | --search=* | --delete=* | --prune=* | --claude-arg=* | --completions=*)
       set -- "${1%%=*}" "${1#*=}" "${@:2}"
       continue
       ;;
@@ -403,6 +646,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       shift
+      ;;
+    --completions)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --completions takes bash, zsh or fish" >&2
+        exit 1
+      fi
+      print_completions "$2"
+      exit 0
       ;;
     --version)
       print_version
