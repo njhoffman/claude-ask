@@ -152,6 +152,16 @@ help_options() {
   fi
 }
 
+@test "all three offer the same themes, models and effort levels as the script" {
+  source_claude_ask
+  local efforts="${EFFORT_LEVELS//,/}" comp_script="" list
+  for list in "${THEMES[*]}" "${MODEL_ALIASES[*]}" "$efforts"; do
+    grep -qF -- "_claude_ask_reply \"\$cur\" $list" "$BASH_COMP"
+    grep -qF -- "=($list)" "$ZSH_COMP"
+    grep -qF -- "-a '$list'" "$FISH_COMP"
+  done
+}
+
 @test "bash: shellcheck is clean" {
   command -v shellcheck > /dev/null || skip "shellcheck is not installed"
   run shellcheck -s bash "$BASH_COMP"

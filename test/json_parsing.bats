@@ -370,3 +370,31 @@ load test_helper
   process_stream_line '{"type":"result","is_error":false,"result":""}'
   [ "$status" = "done" ]
 }
+
+@test "background agents: named until they finish, and they hold off done" {
+  source_claude_ask
+  reset_stream_state
+  process_stream_line '{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"s"}'
+  process_stream_line '{"type":"system","subtype":"background_tasks_changed","tasks":[{"description":"Look at logs"},{"description":"Run tests"}]}'
+  [ "$background_tasks" = "Look at logs, Run tests" ]
+  # A result while they run is not the end
+  process_stream_line '{"type":"result","is_error":false,"result":"still running"}'
+  [ "$status" = "running" ]
+  [ "$result_seen" -eq 1 ]
+  process_stream_line '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
+  [ -z "$background_tasks" ]
+  process_stream_line '{"type":"result","is_error":false,"result":"finished"}'
+  [ "$status" = "done" ]
+  # A status event does not touch them
+  process_stream_line '{"type":"system","subtype":"status"}' || true
+  [ -z "$background_tasks" ]
+}
+
+@test "background agents: an error result is still an error" {
+  source_claude_ask
+  reset_stream_state
+  process_stream_line '{"type":"system","subtype":"background_tasks_changed","tasks":[{"description":"x"}]}'
+  process_stream_line '{"type":"result","is_error":true,"result":"boom"}'
+  [ "$status" = "error" ]
+  [ "$stream_error" = "boom" ]
+}

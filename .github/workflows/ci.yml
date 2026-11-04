@@ -16,10 +16,10 @@ jobs:
       - uses: actions/checkout@v7
 
       # jq, shellcheck and script (util-linux) are in the runner image
-      - name: Install bats, just, bc, zsh, fish and tmux
+      - name: Install bats, just, zsh, fish and tmux
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q bats just bc zsh fish tmux
+          sudo apt-get install -y -q bats just zsh fish tmux
 
       - name: Tool versions
         run: |

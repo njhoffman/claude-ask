@@ -5,10 +5,15 @@ default:
 test *ARGS:
     bats {{ ARGS }} test
 
-# shellcheck the script and the bash completion it prints
+# shellcheck the script, the bash completion it prints, and the test helpers
 lint:
     shellcheck bin/claude-ask
     bin/claude-ask --completions bash | shellcheck -s bash -
+    shellcheck -s bash -x test/stubs/* test/test_helper.bash test/smoke.sh
+
+# try the real claude: three haiku requests, a few cents; not part of test or CI
+smoke:
+    test/smoke.sh
 
 # symlink bin/claude-ask into ~/.local/bin (or $XDG_BIN_HOME), refusing to replace anything but a symlink, and write the shell completions where zsh (fpath), bash-completion and fish look; run it again after an update for new options
 install:

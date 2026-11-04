@@ -325,3 +325,42 @@ JSON
   first=$(grep -n -m1 -vE '^(#.*|set -euo pipefail|)$' "$SCRIPT_PATH" | cut -d: -f2)
   [ "$first" = "require_bash() {" ]
 }
+
+# --help at a terminal
+help_in_pty() {
+  run python3 "$BATS_TEST_DIRNAME/helpers/pty_run.py" -- "$SCRIPT_PATH" --help
+}
+
+@test "--help at a terminal has color, and the same text" {
+  export TERM=xterm-256color
+  unset NO_COLOR CLAUDE_ASK_COLORS
+  local plain
+  plain=$("$SCRIPT_PATH" --help)
+  [[ "$plain" != *$'\e'* ]]
+  help_in_pty
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'\e[1;33mOptions'* ]]
+  [[ "$output" == *$'\e[1;33mExamples:'* ]]
+  [[ "$output" == *$'\e[36m--theme THEME\e[0m'* ]]
+  [[ "$output" == *$'\e[36m-e, --effort LEVEL\e[0m Effort'* ]]
+  [[ "$output" == *$'\e[36m--split[=h|v]\e[0m'* ]]
+  [[ "$output" == *$'\e[36m--resume=ID|N\e[0m'* ]]
+  [[ "$output" == *$'\e[36m--session [ID|N]\e[0m'* ]]
+  [[ "$output" == *$'\e[32mSESSION_DIR\e[0m'* ]]
+  [[ "$output" == *$'\e[32mVISUAL, EDITOR\e[0m'* ]]
+  [[ "$output" == *$'\e[2m'*"# start a chat"$'\e[0m'* ]]
+  # Take the colors away and it is the plain text, to the character
+  local stripped
+  stripped=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\r')
+  [ "$stripped" = "$plain" ]
+}
+
+@test "--help has no color with NO_COLOR, CLAUDE_ASK_COLORS=none or a dumb terminal" {
+  export TERM=xterm-256color
+  NO_COLOR=1 help_in_pty
+  [[ "$output" != *$'\e['* ]]
+  CLAUDE_ASK_COLORS=none help_in_pty
+  [[ "$output" != *$'\e['* ]]
+  TERM=dumb help_in_pty
+  [[ "$output" != *$'\e['* ]]
+}

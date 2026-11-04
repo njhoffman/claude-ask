@@ -90,7 +90,7 @@
 # Environment:
 #   SESSION_DIR        Where sessions are saved
 #                      (default: ${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions)
-#   VISUAL, EDITOR     The editor for \\e, with any arguments (default: vi)
+#   VISUAL, EDITOR     The editor for \e, with any arguments (default: vi)
 #   CLAUDE_ASK_BIN     The claude command to run (default: claude)
 #   CLAUDE_ASK_PAGER   The default pager command (default: nvcat --pager less)
 #   CLAUDE_ASK_EFFORT  The default effort level (-e overrides it)
@@ -146,6 +146,8 @@ export LC_NUMERIC=C
 # Defaults
 # ---------------------------------------------------------------------------
 THEME="minimal"
+THEMES=(minimal bubbles powerline)
+MODEL_ALIASES=(opus sonnet haiku fable)
 # nvcat renders Markdown with Neovim; it pages with less only when writing to
 # a terminal, so while streaming (output read back through a pipe) it prints
 PAGER_CMD="${CLAUDE_ASK_PAGER:-nvcat --pager less}"
@@ -217,8 +219,23 @@ print_version() {
   printf 'claude-ask %s\n' "$version"
 }
 
+# --help: the header comment, in color at a terminal. Plain ANSI colors, which
+# any depth of terminal shows, since the palette is not set up yet here.
 usage() {
-  sed -n '2,/^$/s/^# \{0,1\}//p' "$0"
+  local text head opt env dim off
+  text=$(sed -n '2,/^$/s/^# \{0,1\}//p' "$0")
+  if [[ ! -t 1 || -n "${NO_COLOR:-}" || "${CLAUDE_ASK_COLORS:-}" == none || "${TERM:-}" == dumb ]]; then
+    printf '%s\n' "$text"
+    exit 0
+  fi
+  head=$'\e[1;33m' opt=$'\e[36m' env=$'\e[32m' dim=$'\e[2m' off=$'\e[0m'
+  # The headings last: the ranges below look for them without their color
+  printf '%s\n' "$text" | sed -E \
+    -e "/^Options/,/^Examples/s~^  ((-[a-zA-Z], )?--?[a-zA-Z][a-zA-Z-]*(\\[=[^]]*\\]|=[^ ]*)?( \\[?[A-Z][A-Z|]*\\]?)?)~  $opt\\1$off~" \
+    -e "/^Examples/,/^Environment/s~(  +# .*)\$~$dim\\1$off~" \
+    -e "/^Environment/,\$s~^  ([A-Z][A-Z_, ]*[A-Z_])  ~  $env\\1$off  ~" \
+    -e "s~^(Usage:)~$head\\1$off~" \
+    -e "s~^((Options|Examples|Environment).*:)\$~$head\\1$off~"
   exit 0
 }
 
@@ -461,6 +478,11 @@ CLAUDE_ASK_COMPLETION
   esac
 }
 
+# is_theme NAME: whether NAME is one of THEMES
+is_theme() {
+  [[ " ${THEMES[*]} " == *" $1 "* && "$1" != *" "* ]]
+}
+
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -474,8 +496,8 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       THEME="$2"
-      if [[ ! "$THEME" =~ ^(minimal|bubbles|powerline)$ ]]; then
-        echo "Error: --theme must be one of: minimal, bubbles, powerline" >&2
+      if ! is_theme "$THEME"; then
+        echo "Error: --theme must be one of: ${THEMES[*]}" >&2
         exit 1
       fi
       shift 2
@@ -1291,6 +1313,8 @@ reset_stream_state() {
   api_error="" # an assistant event's error code, e.g. model_not_found
   is_thinking=0
   current_tool="" # the tool running now, for the info line
+  background_tasks="" # the agents running in the background, for the info line
+  result_seen=0
   denied_tools="" # the tools the result says were denied
   answer_lines=0
   answer_chars=0
@@ -1312,7 +1336,8 @@ CONTROL_CHARS_RE='[\u0000-\u0008\u000b-\u001f\u007f-\u009f]'
 # the tool the event starts ("Bash: git status"), the tools a result says were
 # denied; for a stream_event (--include-partial-messages) what it is
 # ("content_block_delta:text_delta") and its value (the text, a tool's name or
-# a message's id); the tool call of the subagent it comes from, if any.
+# a message's id); the tool call of the subagent it comes from, if any; for a
+# background_tasks_changed event "tasks:" and what is running.
 # shellcheck disable=SC2016 # $u is a jq variable
 STREAM_FIELDS_JQ='
   (if .type == "result" then .usage else .message.usage end) as $u
@@ -1337,9 +1362,12 @@ STREAM_FIELDS_JQ='
       (if .type == "stream_event"
        then (.event.delta.text // .event.content_block.name // .event.message.id)
        else null end),
-      .parent_tool_use_id ]
+      .parent_tool_use_id,
+      (if .subtype == "background_tasks_changed"
+       then "tasks:" + ([.tasks[]? | .description // "agent"] | join(", "))
+       else null end) ]
   | map((. // "" | tostring | gsub("'"$CONTROL_CHARS_RE"'"; "")) + "\u0000") | add'
-STREAM_FIELD_COUNT=18
+STREAM_FIELD_COUNT=19
 
 # The parser is one jq that lives for the whole run, a coprocess fed one
 # line at a time, instead of a jq started for every event. It reads raw
@@ -1443,6 +1471,11 @@ process_stream_line() {
       # A run can go on after a result: with a background agent there is a
       # result, a new init and more answer, up to a last result
       if [[ -n "${f[1]}" && "$status" == "done" ]]; then status="running"; fi
+      # The agents running in the background: until they finish more is coming
+      if [[ "${f[18]}" == tasks:* ]]; then
+        background_tasks="${f[18]#tasks:}"
+        if [[ -n "$background_tasks" && "$status" == "done" ]]; then status="running"; fi
+      fi
       if [[ -n "${f[2]}" ]]; then session_id="${f[2]}"; fi
       ;;
     assistant)
@@ -1490,13 +1523,16 @@ process_stream_line() {
       current_tool=""
       ;;
     result)
-      status="done"
+      # With an agent still running this is not the end (see system)
+      if [[ -z "$background_tasks" ]]; then status="done"; fi
+      result_seen=1
       current_tool=""
       denied_tools="${f[14]}"
       result_text="${f[10]}"
       if [[ -n "${f[7]}" ]]; then cost="${f[7]}"; fi
       if [[ -n "${f[8]}" ]]; then duration_ms="${f[8]}"; fi
       if [[ "${f[9]}" == 1 ]]; then
+        result_seen=1
         status="error"
         stream_error="${f[10]:-claude reported an error}"
       fi
@@ -1682,15 +1718,16 @@ yank_session_file() {
   yank_answer "$answer" "$YANK" "$YANK_CODE_N"
 }
 
+# session_files [DIR]: SESSION_FILES is the session files, newest first, the
+# order --history numbers them in
+session_files() {
+  mapfile -t SESSION_FILES < <(ls -t "${1:-$SESSION_DIR}"/*.json 2> /dev/null)
+}
+
 # The newest session file, or nothing when there is none
 newest_session_file() {
-  local f
-  while IFS= read -r f; do
-    if [[ -n "$f" ]]; then
-      printf '%s' "$f"
-      return
-    fi
-  done < <(ls -t "$SESSION_DIR"/*.json 2> /dev/null)
+  session_files
+  printf '%s' "${SESSION_FILES[0]:-}"
 }
 
 # split_direction WIDTH HEIGHT: "h" (side by side) when the pane is more than
@@ -1704,8 +1741,6 @@ split_direction() {
 # Tab completion at the chat prompt
 # ---------------------------------------------------------------------------
 CHAT_COMMANDS=(/help /effort /model /theme /yank /status /new /editor /exit /quit)
-CHAT_MODEL_ALIASES=(opus sonnet haiku fable default)
-CHAT_THEMES=(minimal bubbles powerline)
 
 # chat_complete LINE POINT: what Tab does with the cursor at POINT in LINE.
 # A /command name before the cursor, or the argument of /effort, /model,
@@ -1726,8 +1761,8 @@ chat_complete() {
     word="${BASH_REMATCH[2]}"
     case "${BASH_REMATCH[1]}" in
       /effort) IFS=" " read -ra cands <<< "${EFFORT_LEVELS//,/} default" ;;
-      /model) cands=("${CHAT_MODEL_ALIASES[@]}") ;;
-      /theme) cands=("${CHAT_THEMES[@]}") ;;
+      /model) cands=("${MODEL_ALIASES[@]}" default) ;;
+      /theme) cands=("${THEMES[@]}") ;;
       /yank) cands=(code) ;;
     esac
   fi
@@ -1907,7 +1942,7 @@ save_session() {
 # Theme demo mode: show all themes with sample data and exit
 # ---------------------------------------------------------------------------
 run_theme_demo() {
-  local themes=("minimal" "bubbles" "powerline")
+  local themes=("${THEMES[@]}")
   local sample_model
   model_label sample_model "opus 5.5" "high"
   local sample_in="19.9k"
@@ -2319,9 +2354,8 @@ show_history() {
   local session_dir="$1"
   local files=() f
 
-  while IFS= read -r f; do
-    [[ -n "$f" ]] && files+=("$f")
-  done < <(ls -t "$session_dir"/*.json 2> /dev/null)
+  session_files "$session_dir"
+  files=("${SESSION_FILES[@]}")
 
   if [[ ${#files[@]} -eq 0 ]]; then
     echo "No saved sessions." >&2
@@ -2395,14 +2429,12 @@ show_history() {
 # unique name prefix. Returns 1 when none matches, 2 when the prefix is
 # ambiguous (the matches are listed on stderr).
 find_session() {
-  local arg="$1" f files=() matches=()
+  local arg="$1" f matches=()
   FOUND_SESSION=""
   if [[ "$arg" =~ ^[0-9]+$ ]]; then
-    while IFS= read -r f; do
-      [[ -n "$f" ]] && files+=("$f")
-    done < <(ls -t "$SESSION_DIR"/*.json 2> /dev/null)
-    if ((arg >= 1 && arg <= ${#files[@]})); then
-      FOUND_SESSION="${files[arg - 1]}"
+    session_files
+    if ((arg >= 1 && arg <= ${#SESSION_FILES[@]})); then
+      FOUND_SESSION="${SESSION_FILES[arg - 1]}"
       return 0
     fi
   fi
@@ -2494,17 +2526,15 @@ delete_session() {
 # prune_sessions AGE: delete the sessions last used longer ago than AGE. The
 # timestamp saved in each decides; one with none is kept.
 prune_sessions() {
-  local age="$1" seconds now f i old=() files=()
+  local age="$1" seconds now i old=()
   case "$age" in
     *h) seconds=$((${age%h} * 3600)) ;;
     *w) seconds=$((${age%w} * 604800)) ;;
     *) seconds=$((${age%d} * 86400)) ;;
   esac
-  while IFS= read -r f; do
-    [[ -n "$f" ]] && files+=("$f")
-  done < <(ls -t "$SESSION_DIR"/*.json 2> /dev/null)
-  if ((${#files[@]} > 0)); then
-    history_records "${files[@]}"
+  session_files
+  if ((${#SESSION_FILES[@]} > 0)); then
+    history_records "${SESSION_FILES[@]}"
     printf -v now '%(%s)T' -1
     for ((i = 0; i + 4 < ${#HISTORY_RECORDS[@]}; i += 5)); do
       if [[ "${HISTORY_RECORDS[i + 1]}" =~ ^[0-9]+$ ]] && ((now - HISTORY_RECORDS[i + 1] > seconds)); then
@@ -2659,7 +2689,7 @@ emit_text() {
 update_status_bar() {
   local bar_text info_text bar_rows info_rows rows i out=""
   render_status_bar_fitted bar_text "$@"
-  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking" "${CONV_INFO:-}" "$current_tool"
+  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking" "${CONV_INFO:-}" "${current_tool:-${background_tasks:+agent: $background_tasks}}"
   text_rows bar_rows "$bar_text"
   text_rows info_rows "$info_text"
   rows=$((1 + bar_rows + info_rows))
@@ -2933,9 +2963,10 @@ ask_once() {
 
   print_batch_answer
 
-  # A stream that ended without a result event did not finish
+  # A stream that ended without a result event did not finish; after one, it
+  # did, even if an agent was never reported finished
   if [[ "$status" == "running" ]]; then
-    status="error"
+    if ((result_seen)); then status="done"; else status="error"; fi
   fi
 
   # An unknown model answered nothing: the turn is not saved and the
@@ -3183,9 +3214,9 @@ chat_note() {
 chat_help() {
   chat_note "/help              this list
 /effort [LEVEL]    show or set the effort: $EFFORT_LEVELS, or default
-/model [NAME]      show or set the model (opus, sonnet, haiku, fable, a full
-                   name), or default
-/theme [NAME]      show or set the status bar theme: minimal, bubbles, powerline
+/model [NAME]      show or set the model (${MODEL_ALIASES[*]}, a full name), or
+                   default
+/theme [NAME]      show or set the status bar theme: ${THEMES[*]}
 /yank [code [N]]   copy the last answer, its code blocks, or only block N
 /status            the conversation, model, effort and theme
 /new               start a new conversation
@@ -3252,11 +3283,11 @@ chat_command() {
     /theme)
       if [[ -z "$arg" ]]; then
         chat_note "theme: $THEME"
-      elif [[ "$arg" =~ ^(minimal|bubbles|powerline)$ ]]; then
+      elif is_theme "$arg"; then
         THEME="$arg"
         chat_note "theme: $THEME"
       else
-        echo "claude-ask: theme must be one of: minimal, bubbles, powerline" >&2
+        echo "claude-ask: theme must be one of: ${THEMES[*]}" >&2
       fi
       ;;
     /yank)

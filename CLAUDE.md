@@ -8,7 +8,9 @@ through a pager with a themed status bar redrawn just below the streamed text
 ## Commands
 
 - `just test` (or `bats test/`) runs the suite; `bats test/<file>.bats` one file.
-- `just lint` runs shellcheck on the script.
+- `just lint` runs shellcheck on the script, the bash completion and test helpers.
+- `just smoke` tries the real `claude` (a few haiku requests); never run by
+  `just test` or CI.
 - `just install` symlinks `bin/claude-ask` into `~/.local/bin` and writes what
   `--completions` prints where zsh, bash-completion and fish look.
 
@@ -64,7 +66,8 @@ through a pager with a themed status bar redrawn just below the streamed text
   there. `test/chat_terminal.bats` drives a pseudo-terminal
   with `test/helpers/pty_run.py`.
   `chat_command` runs the `/word` commands (`/help`, `/effort`, `/model`,
-  `/theme`, `/yank`, `/status`, `/new`, `/exit`, `/quit`); a first word that is not `/[a-z]+`
+  `/theme`, `/yank`, `/status`, `/new`, `/exit`, `/quit`; `/editor` and `\\e` are
+  handled in `chat_loop`, which needs the composed text); a first word that is not `/[a-z]+`
   is a question.
 - **Effort and model**: `EFFORT` and `MODEL` (`-e`, `-m`, `CLAUDE_ASK_EFFORT`,
   `CLAUDE_ASK_MODEL`, `/effort`, `/model`; empty means claude's default) are
@@ -107,6 +110,9 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Tools**: stream fields 13 and 14 are the tool an event starts and the result's
   denied tools; `current_tool` is on the info line until a `user` event, text or
   the result.
+- **Background agents**: `background_tasks_changed` gives `background_tasks`, shown
+  on the info line after any running tool; a `result` while it is set does not
+  mean done (`result_seen` covers a stream that ends anyway).
 - **Subagents**: events carrying `parent_tool_use_id` (field 17) add no answer text,
   here and in `SESSION_JQ`; their tools still show. A background agent means
   several `result`s in a run, with a new `init` before more answer, which sets
@@ -160,6 +166,9 @@ through a pager with a themed status bar redrawn just below the streamed text
   controlling terminal. Several tests failed only there, so before a release also
   run `env -i HOME="$HOME" PATH="$PATH" TERM=dumb LANG=C.UTF-8 setsid -w bats test
   < /dev/null`.
+- **Lists**: `THEMES`, `MODEL_ALIASES` and `EFFORT_LEVELS` are the one place in the
+  script; `session_files` lists sessions. The completion heredocs repeat them, which
+  `test/completion.bats` checks.
 - **Testability**: the functions are sourceable with `_CLAUDE_ASK_SOURCED=1`;
   everything the tests call is defined before that guard.
   `common_setup` in `test/test_helper.bash` isolates each test (temp
@@ -174,7 +183,7 @@ through a pager with a themed status bar redrawn just below the streamed text
   stubbed, asks real fish with `complete -C`, and checks all three cover every option
   in `--help`, so a new option needs adding to all three.
 - CI: `.github/workflows/ci.yml` runs `just lint` and `just test` on
-  Ubuntu 24.04 (bats, just, bc, zsh, fish and tmux from apt).
+  Ubuntu 24.04 (bats, just, zsh, fish and tmux from apt).
 
 ## Versioning
 

@@ -6,6 +6,19 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-03
+
+### Added
+
+- `--help` is in color at a terminal. `NO_COLOR` and a pipe give it plain.
+- Agents running in the background show on the info line (`agent: Look at logs`)
+  until they finish, and the status stays running while they do.
+- `just smoke` tries the real `claude` with three haiku requests, a few cents.
+
+### Changed
+
+- `just lint` also checks the test stubs and helpers, and CI no longer installs `bc`.
+
 ## [0.14.0] - 2026-11-03
 
 ### Added

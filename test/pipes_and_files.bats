@@ -321,3 +321,28 @@ STUB
   [ "$(jq -r .session_id "$SESSION_DIR/q.json")" = "subagent-001" ]
   [ "$(jq -r .is_error "$SESSION_DIR/q.json")" = "false" ]
 }
+
+@test "a background agent shows on the info line until it finishes" {
+  export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/subagent.jsonl"
+  run "$SCRIPT_PATH" --no-pager "q"
+  [ "$status" -eq 0 ]
+  local clean
+  clean=$(printf '%s' "$output" | strip_ansi)
+  [[ "$clean" == *"agent: Subagent greeting reply |"* ]]
+  [[ "$(tail -2 <<< "$clean")" != *"agent:"* ]]
+  # Done at the end, as the last result said
+  [[ "$clean" == *"done"* ]]
+}
+
+@test "a stream that ends after a result, with an agent never reported done, succeeds" {
+  export CLAUDE_STUB_FIXTURE="$TEST_TEMP_DIR/f"
+  cat > "$CLAUDE_STUB_FIXTURE" <<'JSONL'
+{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-5-5"}
+{"type":"system","subtype":"background_tasks_changed","tasks":[{"description":"forever"}]}
+{"type":"assistant","message":{"id":"m","content":[{"type":"text","text":"the answer"}]},"session_id":"s"}
+{"type":"result","is_error":false,"result":"the answer","session_id":"s","total_cost_usd":0.1,"duration_ms":1,"usage":{"input_tokens":1,"output_tokens":1}}
+JSONL
+  run "$SCRIPT_PATH" --no-pager "q"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"ended without a result"* ]]
+}

@@ -1,4 +1,5 @@
 # BATS test helper for claude-ask tests
+# shellcheck disable=SC2154 # the state variables are set by the sourced script
 
 SCRIPT_DIR="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/bin/claude-ask"
@@ -53,6 +54,7 @@ teardown() {
 source_claude_ask() {
   export _CLAUDE_ASK_SOURCED=1
   # Provide a dummy question to pass the positional check
+  # shellcheck disable=SC1090,SC1091 # the path is only known at run time
   source "$SCRIPT_PATH" "dummy" 2>/dev/null
   unset _CLAUDE_ASK_SOURCED
 }

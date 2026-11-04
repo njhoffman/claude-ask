@@ -76,10 +76,7 @@ setup() {
   local small_cost large_cost
   small_cost=$(generate_mock_stream small 0 | jq -r 'select(.type == "result") | .total_cost_usd')
   large_cost=$(generate_mock_stream large 0 | jq -r 'select(.type == "result") | .total_cost_usd')
-  # Compare as strings since bc handles decimals
-  local cmp
-  cmp=$(echo "$small_cost < $large_cost" | bc)
-  [[ "$cmp" -eq 1 ]]
+  jq -ne --argjson small "$small_cost" --argjson large "$large_cost" '$small < $large'
 }
 
 @test "mock stream: invalid size returns error" {
