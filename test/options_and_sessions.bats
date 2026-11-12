@@ -61,15 +61,17 @@ setup() {
   grep -qF '| -ir is a question' "$CLAUDE_STUB_LOG"
 }
 
-@test "the info line shows the running tool and its detail" {
+@test "the activity row shows the running tool and its detail" {
   export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/tool_denied.jsonl"
   run "$SCRIPT_PATH" --no-pager "q"
   local clean
   clean=$(printf '%s' "$output" | strip_ansi)
-  [[ "$clean" == *"Bash: git status |"* ]]
-  [[ "$clean" == *"Write: /tmp/x |"* ]]
+  # Each on the row under the counts, alone
+  [[ "$clean" == *$'\n  Bash: git status'* ]]
+  [[ "$clean" == *$'\n  Write: /tmp/x'* ]]
+  [[ "$clean" != *"Bash: git status |"* ]]
   # No detail to show: just the name
-  [[ "$clean" == *"TodoWrite |"* ]]
+  [[ "$clean" == *$'\n  TodoWrite'* ]]
   # Only the first line of a command
   [[ "$clean" != *"second line"* ]]
   # Gone from the final line
@@ -101,18 +103,34 @@ setup() {
   local long
   long=$(printf 'x%.0s' {1..300})
   TERM_COLS=80
-  render_stream_info info 1 2 3 4 running 0 "" "Bash: $long"
-  [[ "$info" == *"…"* ]]
-  [[ "$(printf '%s' "$info" | strip_ansi)" != *"$long"* ]]
-  visible_width w "$info"
+  render_stream_activity act "Bash: $long" ""
+  [[ "$act" == *"…"* ]]
+  [[ "$(printf '%s' "$act" | strip_ansi)" != *"$long"* ]]
+  visible_width w "$act"
   [ "$w" -le 80 ]
+  # It has the whole row: more than the old room beside the counts
+  [ "$w" -ge 70 ]
   # Also in a very narrow terminal it is short
-  TERM_COLS=20
-  render_stream_info info 1 2 3 4 running 0 "" "Bash: $long"
-  [[ "$(printf '%s' "$info" | strip_ansi)" == *"Bash: xxxxx…"* ]]
-  # And not shown when done
-  render_stream_info info 1 2 3 "" done 0 "" "Bash: ls"
-  [[ "$info" != *"Bash"* ]]
+  TERM_COLS=14
+  render_stream_activity act "Bash: $long" ""
+  [[ "$(printf '%s' "$act" | strip_ansi)" == *"Bash: xxxxx…"* ]]
+}
+
+@test "the activity row: tool and agents together, empty when neither runs" {
+  source_claude_ask
+  TERM_COLS=200
+  render_stream_activity act "Read: a" "helper"
+  [ "$(printf '%s' "$act" | strip_ansi)" = "  Read: a | agent: helper" ]
+  render_stream_activity act "" "helper"
+  [ "$(printf '%s' "$act" | strip_ansi)" = "  agent: helper" ]
+  render_stream_activity act "" ""
+  [ -z "$act" ]
+  # Not twice while the Agent call that started it is open
+  render_stream_activity act "Agent: helper" "helper"
+  [ "$(printf '%s' "$act" | strip_ansi)" = "  Agent: helper" ]
+  # The info line no longer carries the tool
+  render_stream_info info 1 2 3 4 running 0 ""
+  [[ "$(printf '%s' "$info" | strip_ansi)" == "  1 lines |"* ]]
 }
 
 @test "denied tools are named after the answer, each once" {

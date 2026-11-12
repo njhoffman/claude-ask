@@ -322,13 +322,15 @@ STUB
   [ "$(jq -r .is_error "$SESSION_DIR/q.json")" = "false" ]
 }
 
-@test "a background agent shows on the info line until it finishes" {
+@test "a background agent shows on the activity row until it finishes" {
   export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/subagent.jsonl"
   run "$SCRIPT_PATH" --no-pager "q"
   [ "$status" -eq 0 ]
   local clean
   clean=$(printf '%s' "$output" | strip_ansi)
-  [[ "$clean" == *"agent: Subagent greeting reply |"* ]]
+  # On its own row, under the counts
+  [[ "$clean" == *$'\n  agent: Subagent greeting reply'* ]]
+  [[ "$clean" != *"agent: Subagent greeting reply |"* ]]
   [[ "$(tail -2 <<< "$clean")" != *"agent:"* ]]
   # Done at the end, as the last result said
   [[ "$clean" == *"done"* ]]

@@ -192,7 +192,7 @@ debug_log() {
 # CLI argument parsing
 # ---------------------------------------------------------------------------
 # In the script itself, so a copy of it knows; a test keeps it the same as VERSION
-CLAUDE_ASK_VERSION="0.15.4"
+CLAUDE_ASK_VERSION="0.15.5"
 print_version() {
   printf 'claude-ask %s\n' "$CLAUDE_ASK_VERSION"
 }
@@ -1283,18 +1283,29 @@ format_elapsed() {
   fi
 }
 
+# OUT tool agents: the row under the info line while streaming, naming the
+# running tool and the background agents; empty when neither runs. It is cut
+# to one row of TERM_COLS (or 120 columns when that is unknown).
+render_stream_activity() {
+  local _out="$1" _act="${2:-}" _room=120
+  # The Agent call that starts a background agent already names it
+  if [[ -n "${3:-}" && "$_act" != "Agent: $3" ]]; then _act+="${_act:+ | }agent: $3"; fi
+  if [[ -z "$_act" ]]; then
+    printf -v "$_out" '%s' ""
+    return 0
+  fi
+  if ((TERM_COLS > 0)); then _room=$((TERM_COLS - 2)); fi
+  if ((_room < 12)); then _room=12; fi
+  if ((${#_act} > _room)); then _act="${_act:0:_room-1}…"; fi
+  printf -v "$_out" '  %s%s%s' "$FG_DIM" "$_act" "$RST"
+}
+
 # OUT lines chars chunks elapsed status is_thinking [extra]: the line under
 # the bar; extra (e.g. "turn 3 | $0.0412 total") is appended
 render_stream_info() {
-  local _out="$1" _lines="$2" _chars="$3" _chunks="$4" _elapsed="$5" _is_done="$6" _is_thinking="${7:-0}" _extra="${8:-}" _tool="${9:-}"
-  local _info="  ${FG_DIM}" _count_str _elapsed_str _room=60
-  if [[ -n "$_tool" && "$_is_done" != "done" ]]; then
-    # What is left of the width after the counts (about 45), so it stays one row
-    if ((TERM_COLS > 0)); then _room=$((TERM_COLS - 45)); fi
-    if ((_room < 12)); then _room=12; fi
-    if ((${#_tool} > _room)); then _tool="${_tool:0:_room-1}…"; fi
-    _info+="${_tool} ${FG_DIM}|${RST}${FG_DIM} "
-  elif [[ "$_is_thinking" -eq 1 && "$_is_done" != "done" ]]; then
+  local _out="$1" _lines="$2" _chars="$3" _chunks="$4" _elapsed="$5" _is_done="$6" _is_thinking="${7:-0}" _extra="${8:-}"
+  local _info="  ${FG_DIM}" _count_str _elapsed_str
+  if [[ "$_is_thinking" -eq 1 && "$_is_done" != "done" ]]; then
     _info+="thinking... ${FG_DIM}|${RST}${FG_DIM} "
   fi
   format_count _count_str "$_chars"
@@ -2848,15 +2859,18 @@ emit_text() {
 # so nothing scrolls between saving the cursor and restoring it.
 update_status_bar() {
   ((CURSOR_MOVES)) || return 0
-  local bar_text info_text bar_rows info_rows rows i out=""
+  local bar_text info_text act_text bar_rows info_rows act_rows rows i out=""
   render_status_bar_fitted bar_text "$@"
-  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking" "${CONV_INFO:-}" "${current_tool:-${background_tasks:+agent: $background_tasks}}"
+  render_stream_info info_text "$answer_lines" "$answer_chars" "$text_chunks" "$((SECONDS - STREAM_START))" "$status" "$is_thinking" "${CONV_INFO:-}"
+  render_stream_activity act_text "${current_tool:-}" "${background_tasks:-}"
   text_rows bar_rows "$bar_text"
   text_rows info_rows "$info_text"
-  rows=$((1 + bar_rows + info_rows))
+  text_rows act_rows "$act_text"
+  rows=$((1 + bar_rows + info_rows + act_rows))
   for ((i = 0; i < rows; i++)); do out+=$'\eD'; done
-  # Clear below the cursor (the old bar and info), then draw two lines down
-  printf '%s\e[%dA\e7\e[J\n\n\e[2K%s\n\e[2K%s\e8' "$out" "$rows" "$bar_text" "$info_text" >&"$BAR_FD"
+  # Clear below the cursor (the old bar, info and activity), then draw two
+  # lines down; the activity row stays even when empty, so the bar holds still
+  printf '%s\e[%dA\e7\e[J\n\n\e[2K%s\n\e[2K%s\n\e[2K%s\e8' "$out" "$rows" "$bar_text" "$info_text" "$act_text" >&"$BAR_FD"
   STATUS_BAR_VISIBLE=1
 }
 

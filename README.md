@@ -57,8 +57,8 @@ that answered (or the default); a model `-r` restored is then retried with
 the default.
 
 Options with a value also take `--option=VALUE`, and short flags can be bundled
-(`-ir`, `-ie high`). While a tool runs, the line under the status bar names it
-(`Bash: git status`); tools `claude` was not permitted to use are listed after
+(`-ir`, `-ie high`). While a tool or a background agent runs, a row under the
+counts names it (`Bash: git status`, `agent: ...`); tools `claude` was not permitted to use are listed after
 the answer. `\e` opens `$VISUAL` or `$EDITOR`, which can hold arguments
 (`code --wait`).
 

@@ -4,7 +4,7 @@ Open work on claude-ask. Every item carries a priority, `(p1)` high, `(p2)`
 normal or `(p3)` low, and a category: `[bug]`, `[feature]`, `[refactor]`,
 `[docs]`, `[test]`, `[chore]` or `[perf]`.
 
-Reviewed: 2026-11-03
+Reviewed: 2026-11-12
 
 ## 10. Small bugs and suggestions
 
@@ -35,6 +35,11 @@ Reviewed: 2026-11-03
 - [ ] **Keep CI's versions moving.** (p3) [chore] `actions/checkout@v7` and bats `v1.11.0` are
   fixed by hand. Dependabot for actions would notice new ones; pinning to a commit is
   stricter, if that is wanted for a small project.
+- [ ] **The activity row is cut by characters, not columns.** (p3) [bug]
+  `render_stream_activity` cuts to `TERM_COLS - 2` characters, so a tool detail with
+  wide characters (a CJK path, emoji in a command) can still wrap to a second row.
+  `text_rows` counts it right, so nothing is overwritten, but the bar jumps a row.
+  Cut with `display_width` (already used by `fit_column`) instead of `${#}`.
 - [ ] **Run the tests in parallel.** (p3) [test] The suite takes 1:30-3:30 one at a time. It
   isolates each test in a temp directory, and `bats --jobs` is available where GNU
   `parallel` is (it is here; CI would install it). Not tried: the pty and tmux tests have

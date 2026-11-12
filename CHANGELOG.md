@@ -6,6 +6,15 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.15.5] - 2026-11-12
+
+### Changed
+
+- The running tool and any background agents are shown on their own row under the
+  counts while an answer streams, with the whole width, instead of squeezed in front
+  of the counts; both show when both run. The row is kept, blank, when nothing runs,
+  so the bar does not move.
+
 ## [0.15.4] - 2026-11-03
 
 ### Fixed

@@ -116,10 +116,11 @@ through a pager with a themed status bar redrawn just below the streamed text
   read as one turn (`SESSION_TURNS_JQ`'s `turns_of`). Model and cwd come from
   the `init` system event; hook events come before it.
 - **Tools**: stream fields 13 and 14 are the tool an event starts and the result's
-  denied tools; `current_tool` is on the info line until a `user` event, text or
-  the result.
+  denied tools; `current_tool` is on the activity row (`render_stream_activity`,
+  under the info line, reserved while streaming, absent from the final bar) until a
+  `user` event, text or the result.
 - **Background agents**: `background_tasks_changed` gives `background_tasks`, shown
-  on the info line after any running tool; a `result` while it is set does not
+  on the activity row after any running tool; a `result` while it is set does not
   mean done (`result_seen` covers a stream that ends anyway).
 - **Running totals**: `total_cost_usd`, `duration_api_ms` and `modelUsage` are running
   totals for the whole conversation, across results and across resumes; `usage` and
