@@ -33,7 +33,7 @@ jobs:
       # instead, so it never goes stale (Dependabot moves the action)
       - name: Install bats (22.04)
         if: matrix.os == 'ubuntu-22.04'
-        uses: bats-core/bats-action@4.0.0
+        uses: bats-core/bats-action@4.1.0
         with:
           support-install: false
           assert-install: false
