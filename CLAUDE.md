@@ -43,7 +43,8 @@ through a pager with a themed status bar redrawn just below the streamed text
   (`CLAUDE_ASK_FORCE_TTY` for tests; `common_setup` sets it and `exec < /dev/null`).
   Bars, notes and cursor moves go to `BAR_FD`: stdout, else stderr if a terminal,
   else `/dev/null`. Without `OUT_TTY`, stdout gets only the answer.
-- **Piped input**: `read_piped_input`; with a question only a pipe or file is
+- **Piped input**: `read_piped_input`, through a private temp file so a NUL
+  (binary or UTF-16 input) is refused; with a question only a pipe or file is
   read. `-i` then does `exec < /dev/tty`. `CLAUDE_ASK_FORCE_INTERACTIVE` keeps
   stdin as typed chat input.
 - **Control characters**: `CONTROL_CHARS_RE` (a jq regex), in the stream fields
@@ -52,7 +53,8 @@ through a pager with a themed status bar redrawn just below the streamed text
   `${XDG_DATA_HOME:-~/.local/share}/claude-ask/sessions/{question-slug}.json`
   (moved once from `OLD_SESSION_DIR`, unless `SESSION_DIR` is set), plus the raw
   stream as `{question-slug}.jsonl` with `--save-raw`; `--history` lists
-  them, `--session ID|N` replays one.
+  them, `--session ID|N` replays one. A slug of digits alone gets `q-`, so a
+  name is never a list number.
 - **Demos**: `--demo-themes` and `--demo-output` render without calling Claude
   (`CLAUDE_ASK_DEMO_DELAY=0` removes the frame delay; the tests set it).
 - **Question**: passed to `claude -p` on stdin, never as an argument.
@@ -181,7 +183,8 @@ through a pager with a themed status bar redrawn just below the streamed text
 - **Colors**: the palette is written in 24-bit; `COLOR_DEPTH` (from
   `CLAUDE_ASK_COLORS`, `NO_COLOR`, `COLORTERM`, `TERM`) makes `recolor` rewrite
   the variables. `common_setup` sets `COLORTERM=truecolor`.
-- **History**: `fit_column` and `display_width` do the columns;
+- **History**: `fit_column` (padding what `cut_to_width` cuts, through the
+  globals `CUT_TEXT` and `CUT_COLUMNS`) and `display_width` do the columns;
   `history_records` reads all session files with one `jq`
   (`HISTORY_JQ`), falling back to one per file when one is not JSON;
   `format_age` formats the age.

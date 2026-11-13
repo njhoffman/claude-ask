@@ -11,6 +11,31 @@ setup() {
 # ---------------------------------------------------------------------------
 # slugify_question
 # ---------------------------------------------------------------------------
+@test "slugify_question: digits alone get a prefix, so they are not a list number" {
+  [ "$(slugify_question "5")" = "q-5" ]
+  [ "$(slugify_question "  2026?")" = "q-2026" ]
+  # Anything else is left as it was
+  [ "$(slugify_question "5 things")" = "5-things" ]
+  [ "$(slugify_question "1.5")" = "1-5" ]
+}
+
+@test "a question of only digits is saved where --session NAME and its number both find it" {
+  source_claude_ask
+  run "$SCRIPT_PATH" --no-pager "5" < /dev/null
+  [ "$status" -eq 0 ]
+  [ -f "$SESSION_DIR/q-5.json" ]
+  for n in 2 3 4 5 6; do
+    jq -n --arg n "$n" '{session_id: ("s" + $n), question: ("other " + $n), answer: "a"}' \
+      > "$SESSION_DIR/other-$n.json"
+    touch -d "+$n seconds" "$SESSION_DIR/other-$n.json"
+  done
+  # Number 5 is the fifth newest, and the digits session is still reachable by name
+  find_session 5
+  [ "$(basename "$FOUND_SESSION")" = "other-2.json" ]
+  find_session q-5
+  [ "$(basename "$FOUND_SESSION")" = "q-5.json" ]
+}
+
 @test "slugify_question: lowercases and replaces spaces with hyphens" {
   result=$(slugify_question "What Is Bash")
   [ "$result" = "what-is-bash" ]

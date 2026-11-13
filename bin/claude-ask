@@ -192,7 +192,7 @@ debug_log() {
 # CLI argument parsing
 # ---------------------------------------------------------------------------
 # In the script itself, so a copy of it knows; a test keeps it the same as VERSION
-CLAUDE_ASK_VERSION="0.16.0"
+CLAUDE_ASK_VERSION="0.16.1"
 print_version() {
   printf 'claude-ask %s\n' "$CLAUDE_ASK_VERSION"
 }
@@ -845,9 +845,22 @@ read_piped_input() {
     echo "claude-ask: waiting for piped input (< /dev/null skips it)" >&2
   ) &
   note=$!
-  PIPED_INPUT=$(cat)
+  # Through a private file, so a NUL can be found: bash drops it from $(...)
+  # with a warning, and a NUL means a binary or UTF-16 file was piped
+  local tmp nul dir="${XDG_RUNTIME_DIR:-}"
+  if [[ ! -d "$dir" || ! -w "$dir" ]]; then dir="${TMPDIR:-/tmp}"; fi
+  tmp=$(umask 077 && mktemp "$dir/claude-ask-input.XXXXXX")
+  cat > "$tmp"
   kill "$note" 2> /dev/null || true
   wait "$note" 2> /dev/null || true
+  nul=$(tr -cd '\000' < "$tmp" | wc -c)
+  if ((nul > 0)); then
+    rm -f "$tmp"
+    echo "claude-ask: the piped input is not text: it has NUL bytes (a binary or UTF-16 file?); nothing was asked" >&2
+    exit 1
+  fi
+  PIPED_INPUT=$(< "$tmp")
+  rm -f "$tmp"
 }
 
 # With a terminal on stdin (or the tests' stand-in, whose stdin is the typed
@@ -1285,9 +1298,13 @@ format_elapsed() {
 
 # OUT tool agents: the row under the info line while streaming, naming the
 # running tool and the background agents; empty when neither runs. It is cut
-# to one row of TERM_COLS (or 120 columns when that is unknown).
+# to one row of TERM_COLS columns (or 120 when that is unknown), wide
+# characters counted as two. Measuring those forks, so the last row is kept and
+# made again only when what it shows or the width changes.
+ACTIVITY_KEY=""
+ACTIVITY_ROW=""
 render_stream_activity() {
-  local _out="$1" _act="${2:-}" _room=120
+  local _out="$1" _act="${2:-}" _room=120 _key
   # The Agent call that starts a background agent already names it
   if [[ -n "${3:-}" && "$_act" != "Agent: $3" ]]; then _act+="${_act:+ | }agent: $3"; fi
   if [[ -z "$_act" ]]; then
@@ -1296,8 +1313,13 @@ render_stream_activity() {
   fi
   if ((TERM_COLS > 0)); then _room=$((TERM_COLS - 2)); fi
   if ((_room < 12)); then _room=12; fi
-  if ((${#_act} > _room)); then _act="${_act:0:_room-1}…"; fi
-  printf -v "$_out" '  %s%s%s' "$FG_DIM" "$_act" "$RST"
+  _key="$_room:$_act"
+  if [[ "$_key" != "$ACTIVITY_KEY" ]]; then
+    cut_to_width CUT_TEXT "$_act" "$_room"
+    printf -v ACTIVITY_ROW '  %s%s%s' "$FG_DIM" "$CUT_TEXT" "$RST"
+    ACTIVITY_KEY="$_key"
+  fi
+  printf -v "$_out" '%s' "$ACTIVITY_ROW"
 }
 
 # OUT lines chars chunks elapsed status is_thinking [extra]: the line under
@@ -2405,11 +2427,15 @@ run_demo_output() {
 # Session naming helpers
 # ---------------------------------------------------------------------------
 slugify_question() {
-  local q="$1" max="${2:-50}"
-  printf '%s' "$q" \
+  local q="$1" max="${2:-50}" slug
+  slug=$(printf '%s' "$q" \
     | tr '[:upper:]' '[:lower:]' \
     | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' \
-    | cut -c1-"$max"
+    | cut -c1-"$max")
+  # Digits alone would be taken for a number in the --history list
+  # (--session 5, --resume=5, --delete 5), hiding the session behind it
+  if [[ "$slug" =~ ^[0-9]+$ ]]; then slug="q-$slug"; fi
+  printf '%s' "$slug"
 }
 
 unique_session_name() {
@@ -2494,24 +2520,32 @@ display_width() {
   printf -v "$1" '%d' "${_w:-${#2}}"
 }
 
+# cut_to_width OUT TEXT WIDTH: TEXT, cut with an ellipsis when it takes more
+# than WIDTH columns; CUT_COLUMNS is the columns the result takes
+cut_to_width() {
+  local _t="$2" _width="$3" _over
+  display_width CUT_COLUMNS "$_t"
+  if ((CUT_COLUMNS > _width)); then
+    _t="${_t:0:_width-1}"
+    display_width CUT_COLUMNS "$_t"
+    while ((CUT_COLUMNS > _width - 1)); do
+      # At most two columns a character, so this does not overshoot by more
+      _over=$(((CUT_COLUMNS - _width + 2) / 2))
+      _t="${_t:0:${#_t}-_over}"
+      display_width CUT_COLUMNS "$_t"
+    done
+    _t+="…"
+    CUT_COLUMNS=$((CUT_COLUMNS + 1))
+  fi
+  printf -v "$1" '%s' "$_t"
+}
+
 # fit_column OUT TEXT WIDTH: TEXT cut (with an ellipsis) or padded with spaces
 # to exactly WIDTH columns
 fit_column() {
-  local _t="$2" _width="$3" columns _over
-  display_width columns "$_t"
-  if ((columns > _width)); then
-    _t="${_t:0:_width-1}"
-    display_width columns "$_t"
-    while ((columns > _width - 1)); do
-      # At most two columns a character, so this does not overshoot by more
-      _over=$(((columns - _width + 2) / 2))
-      _t="${_t:0:${#_t}-_over}"
-      display_width columns "$_t"
-    done
-    _t+="…"
-    columns=$((columns + 1))
-  fi
-  printf -v "$1" '%s%*s' "$_t" "$((_width - columns))" ""
+  # Into a global: an output named like cut_to_width's locals would be lost
+  cut_to_width CUT_TEXT "$2" "$3"
+  printf -v "$1" '%s%*s' "$CUT_TEXT" "$(($3 - CUT_COLUMNS))" ""
 }
 
 # search_sessions TEXT FILE...: the files (NUL-terminated) with TEXT in a

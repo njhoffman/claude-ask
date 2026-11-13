@@ -6,9 +6,11 @@ normal or `(p3)` low, and a category: `[bug]`, `[feature]`, `[refactor]`,
 
 Reviewed: 2026-11-12
 
-## 10. Small bugs and suggestions
+## Completed
 
-- [ ] **A question of only digits makes a session its number hides.** (p3) [bug] Asking
+### 10. Small bugs and suggestions (completed 2026-11-12)
+
+- [x] **A question of only digits makes a session its number hides.** (p3) [bug] Asking
   `5` saves `5.json`, and `--session 5`, `--resume=5` and `--delete 5` mean the fifth
   newest whenever there are five, so that session can only be reached by its number.
   `--delete --force` could remove the wrong one. Give such a slug a prefix (`q-5`).
@@ -16,7 +18,7 @@ Reviewed: 2026-11-12
   `VERSION` beside `bin/`, though `--completions` was built to work from a copy alone
   (checked). Keep the version in the script as well, with a test that they match, or
   have `just lint` check it.
-- [ ] **Binary piped input.** (p3) [bug] `head -c 200 /dev/urandom | claude-ask "q"` prints
+- [x] **Binary piped input.** (p3) [bug] `head -c 200 /dev/urandom | claude-ask "q"` prints
   bash's `command substitution: ignored null byte` with a line number, and sends the
   rest as the question. Refuse input with NUL bytes, saying so, since a file was probably
   piped by mistake.
@@ -35,7 +37,7 @@ Reviewed: 2026-11-12
 - [x] **Keep CI's versions moving.** (p3) [chore] `actions/checkout@v7` and bats `v1.11.0` are
   fixed by hand. Dependabot for actions would notice new ones; pinning to a commit is
   stricter, if that is wanted for a small project.
-- [ ] **The activity row is cut by characters, not columns.** (p3) [bug]
+- [x] **The activity row is cut by characters, not columns.** (p3) [bug]
   `render_stream_activity` cuts to `TERM_COLS - 2` characters, so a tool detail with
   wide characters (a CJK path, emoji in a command) can still wrap to a second row.
   `text_rows` counts it right, so nothing is overwritten, but the bar jumps a row.
@@ -44,8 +46,6 @@ Reviewed: 2026-11-12
   isolates each test in a temp directory, and `bats --jobs` is available where GNU
   `parallel` is (it is here; CI would install it). Not tried: the pty and tmux tests have
   timing in them, so they may need to stay serial.
-
-## Completed
 
 ### 9. Environments (completed 2026-11-03)
 

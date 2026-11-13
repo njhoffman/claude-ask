@@ -116,6 +116,26 @@ setup() {
   [[ "$(printf '%s' "$act" | strip_ansi)" == *"Bash: xxxxx…"* ]]
 }
 
+@test "the activity row is cut by columns: wide characters count as two" {
+  source_claude_ask
+  local wide plain
+  wide=$(printf '文%.0s' {1..40})
+  TERM_COLS=30
+  render_stream_activity act "Read: $wide" ""
+  plain=$(printf '%s' "$act" | strip_ansi)
+  display_width w "$plain"
+  [ "$w" -le 30 ]
+  [ "$w" -ge 28 ]
+  [[ "$plain" == *"…" ]]
+  # The same again is the row kept, and a new width makes it again
+  render_stream_activity again "Read: $wide" ""
+  [ "$again" = "$act" ]
+  TERM_COLS=20
+  render_stream_activity act "Read: $wide" ""
+  display_width w "$(printf '%s' "$act" | strip_ansi)"
+  [ "$w" -le 20 ]
+}
+
 @test "the activity row: tool and agents together, empty when neither runs" {
   source_claude_ask
   TERM_COLS=200

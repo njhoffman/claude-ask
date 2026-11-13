@@ -6,6 +6,17 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-12
+
+### Fixed
+
+- A question of only digits (`5`) is saved as `q-5`, so its session is no longer
+  hidden behind the fifth newest one in `--session 5`, `--resume=5` and `--delete 5`.
+- Piped input with NUL bytes (a binary or UTF-16 file) is refused, saying so,
+  instead of being asked without them after a warning from bash.
+- The row naming the running tool is cut by columns, so a detail with wide
+  characters no longer wraps it onto a second row.
+
 ## [0.16.0] - 2026-11-12
 
 ### Added

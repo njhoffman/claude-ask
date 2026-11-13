@@ -204,4 +204,14 @@ setup() {
   [[ "$info" == *"1.5k chars"* ]]
   format_cost status 0.5
   [ "$status" = '$0.5000' ]
+  local columns act key t
+  fit_column columns "abcdefgh" 5
+  [ "$columns" = "abcd…" ]
+  cut_to_width t "abcdefgh" 5
+  [ "$t" = "abcd…" ]
+  TERM_COLS=200
+  render_stream_activity act "Read: a" ""
+  [[ "$act" == *"Read: a"* ]]
+  render_stream_activity key "Grep: b" ""
+  [[ "$key" == *"Grep: b"* ]]
 }

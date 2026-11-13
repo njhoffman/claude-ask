@@ -24,6 +24,21 @@ asked() {
   [ "$(asked)" = 'summarize\n\nDATA\nMORE' ]
 }
 
+@test "piped input with NUL bytes is refused, and nothing is asked" {
+  run --separate-stderr "$SCRIPT_PATH" --no-pager "q" < <(printf 'text\0more')
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"the piped input is not text: it has NUL bytes"* ]]
+  [[ "$stderr" != *"ignored null byte"* ]]
+  [ ! -s "$CLAUDE_STUB_LOG" ]
+  # UTF-16 too, and with no question
+  iconv -f UTF-8 -t UTF-16LE <<< "hello" > "$TEST_TEMP_DIR/u16"
+  run --separate-stderr "$SCRIPT_PATH" --no-pager < "$TEST_TEMP_DIR/u16"
+  [ "$status" -eq 1 ]
+  [ ! -s "$CLAUDE_STUB_LOG" ]
+  # The temp file it read into is gone
+  [ -z "$(ls "$XDG_RUNTIME_DIR" | grep claude-ask-input)" ]
+}
+
 @test "a file on stdin follows the question too" {
   printf 'FROM FILE\n' > "$TEST_TEMP_DIR/in"
   run "$SCRIPT_PATH" --no-pager "summarize" < "$TEST_TEMP_DIR/in"
