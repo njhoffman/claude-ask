@@ -6,6 +6,31 @@ All notable changes to claude-ask are recorded here, in the
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-12
+
+### Added
+
+- `/retry` in a chat asks a failed or interrupted question again, with any `/effort`
+  or `/model` set since. `claude` sees the question once: the turn that went wrong is
+  left out of its session, which a plain resend did not do (`claude` keeps an
+  interrupted question). It refuses after an answered question, and in a session
+  saved by an earlier version, which lacks what it needs.
+- `/yank` after Ctrl-C copies the answer as far as it got, code blocks too, and says
+  it is partial. After an interrupt before any text, or a failed question, it says
+  the answer it copies is the one from before, instead of copying it silently.
+- `just uninstall` removes what `just install` wrote: the symlink (only when it
+  points into this checkout) and the completion files. Saved sessions stay.
+- Each version tag gets a GitHub release with its `CHANGELOG.md` section;
+  `scripts/release-notes X.Y.Z` prints one.
+
+### Changed
+
+- `just test` runs the suite in parallel when GNU `parallel` is installed, about
+  four times faster (`TEST_JOBS=1` for one at a time); so does CI.
+- CI takes the newest bats on Ubuntu 22.04, and Dependabot proposes new versions of
+  the GitHub actions. `just smoke` makes a fourth request, to check what `/retry`
+  relies on.
+
 ## [0.15.5] - 2026-11-12
 
 ### Changed

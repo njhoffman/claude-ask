@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# scripts/release-notes X.Y.Z [CHANGELOG]: print that version's section of
+# CHANGELOG.md (default: the repository's), without its heading or the blank
+# lines around it, for a GitHub release. Status 1 when there is no section.
+set -euo pipefail
+
+version="${1:?usage: release-notes X.Y.Z [CHANGELOG]}"
+version="${version#v}"
+file="${2:-$(cd "$(dirname "$0")/.." && pwd)/CHANGELOG.md}"
+
+awk -v v="$version" '
+  /^## \[/ {
+    if (found) exit
+    if (index($0, "## [" v "]") == 1) { found = 1; next }
+  }
+  found { lines[++n] = $0 }
+  END {
+    if (!found) exit 1
+    first = 1; last = n
+    while (first <= last && lines[first] ~ /^[[:space:]]*$/) first++
+    while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+    for (i = first; i <= last; i++) print lines[i]
+  }' "$file" || {
+  echo "release-notes: no section for $version in $file" >&2
+  exit 1
+}

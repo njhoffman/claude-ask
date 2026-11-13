@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# scripts/install install|uninstall, run by `just install` and `just uninstall`.
+#
+# install: symlink bin/claude-ask into ~/.local/bin (or $XDG_BIN_HOME), refusing
+# to replace anything but a symlink, and write the shell completions where zsh
+# (fpath), bash-completion and fish look; run it again after an update for new
+# options.
+# uninstall: remove the symlink, only when it points at this checkout's script,
+# and the completion files install writes. Saved sessions are left alone.
+set -euo pipefail
+
+data="${XDG_DATA_HOME:-$HOME/.local/share}"
+src="$(cd "$(dirname "$0")/.." && pwd -P)/bin/claude-ask"
+dest="${XDG_BIN_HOME:-$HOME/.local/bin}/claude-ask"
+# shell and where its completion goes
+completions=(
+  "zsh $data/zsh/site-functions/_claude-ask"
+  "bash ${BASH_COMPLETION_USER_DIR:-$data/bash-completion}/completions/claude-ask"
+  "fish ${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions/claude-ask.fish"
+)
+
+install() {
+  local entry shell file
+  mkdir -p "${dest%/*}"
+  if [[ -e "$dest" && ! -L "$dest" ]]; then
+    echo "install: $dest exists and is not a symlink; remove it first" >&2
+    exit 1
+  fi
+  ln -sfn "$src" "$dest"
+  echo "$dest -> $src"
+  for entry in "${completions[@]}"; do
+    shell="${entry%% *}"
+    file="${entry#* }"
+    if [[ "$shell" == fish ]] && ! command -v fish > /dev/null 2>&1; then continue; fi
+    mkdir -p "${file%/*}"
+    # Not through a symlink an older install left there
+    rm -f "$file"
+    "$src" --completions "$shell" > "$file"
+    echo "$file"
+  done
+}
+
+uninstall() {
+  local entry file target
+  if [[ -L "$dest" ]]; then
+    target=$(readlink -f "$dest" || true)
+    if [[ "$target" == "$src" ]]; then
+      rm -f "$dest"
+      echo "removed $dest"
+    else
+      echo "uninstall: $dest points at ${target:-nothing}, not $src; left alone" >&2
+    fi
+  elif [[ -e "$dest" ]]; then
+    echo "uninstall: $dest is not a symlink; left alone" >&2
+  fi
+  # Whether or not fish is installed now: an earlier install may have written it
+  for entry in "${completions[@]}"; do
+    file="${entry#* }"
+    if [[ -e "$file" || -L "$file" ]]; then
+      rm -f "$file"
+      echo "removed $file"
+    fi
+  done
+}
+
+case "${1:-}" in
+  install) install ;;
+  uninstall) uninstall ;;
+  *)
+    echo "usage: $0 install|uninstall" >&2
+    exit 2
+    ;;
+esac

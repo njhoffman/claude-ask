@@ -20,19 +20,19 @@ Reviewed: 2026-11-12
   bash's `command substitution: ignored null byte` with a line number, and sends the
   rest as the question. Refuse input with NUL bytes, saying so, since a file was probably
   piped by mistake.
-- [ ] **An interrupted answer cannot be yanked.** (p3) [feature] After Ctrl-C the text is
+- [x] **An interrupted answer cannot be yanked.** (p3) [feature] After Ctrl-C the text is
   on screen, but `/yank` says there is no answer, or copies the one before it without
   saying so. Keep the partial text for `/yank`, and say it is partial.
-- [ ] **`/retry` in a chat.** (p3) [feature] After a failed or interrupted turn the
+- [x] **`/retry` in a chat.** (p3) [feature] After a failed or interrupted turn the
   question has to be fetched with the up arrow and sent again. `/retry` could ask the
   last question again, optionally with `/effort` or `/model` changed first.
-- [ ] **`just uninstall`.** (p3) [chore] `just install` now writes up to three files beside
+- [x] **`just uninstall`.** (p3) [chore] `just install` now writes up to three files beside
   the symlink, and nothing removes them. Remove what it would write, and the old
   session location is left alone.
-- [ ] **GitHub releases from the tags.** (p3) [chore] There are 20-odd tags and no releases,
+- [x] **GitHub releases from the tags.** (p3) [chore] There are 20-odd tags and no releases,
   so the changelog is only readable in the repository. A workflow on `v*` tags could
   publish that version's `CHANGELOG.md` section.
-- [ ] **Keep CI's versions moving.** (p3) [chore] `actions/checkout@v7` and bats `v1.11.0` are
+- [x] **Keep CI's versions moving.** (p3) [chore] `actions/checkout@v7` and bats `v1.11.0` are
   fixed by hand. Dependabot for actions would notice new ones; pinning to a commit is
   stricter, if that is wanted for a small project.
 - [ ] **The activity row is cut by characters, not columns.** (p3) [bug]
@@ -40,7 +40,7 @@ Reviewed: 2026-11-12
   wide characters (a CJK path, emoji in a command) can still wrap to a second row.
   `text_rows` counts it right, so nothing is overwritten, but the bar jumps a row.
   Cut with `display_width` (already used by `fit_column`) instead of `${#}`.
-- [ ] **Run the tests in parallel.** (p3) [test] The suite takes 1:30-3:30 one at a time. It
+- [x] **Run the tests in parallel.** (p3) [test] The suite takes 1:30-3:30 one at a time. It
   isolates each test in a temp directory, and `bats --jobs` is available where GNU
   `parallel` is (it is here; CI would install it). Not tried: the pty and tmux tests have
   timing in them, so they may need to stay serial.

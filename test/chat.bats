@@ -139,6 +139,49 @@ SID="full-session-001"
   [ -f "$SESSION_DIR/after.json" ]
 }
 
+@test "chat: /retry with nothing to retry, or after an answer, says why and asks nothing" {
+  export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/retry_answer.jsonl"
+  CLAUDE_ASK_FORCE_INTERACTIVE=1 run --separate-stderr "$SCRIPT_PATH" --no-pager \
+    < <(printf '/retry\nfirst\n/retry\n/retry now\n')
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"no question has been asked in this chat to retry"* ]]
+  [[ "$stderr" == *"the last question was answered"* ]]
+  [[ "$stderr" == *"/retry takes nothing"* ]]
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+}
+
+@test "chat: /retry after a failed later turn resumes at the last answer" {
+  export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/retry_answer.jsonl"
+  export CLAUDE_STUB_FAIL_CALL=2
+  CLAUDE_ASK_FORCE_INTERACTIVE=1 run --separate-stderr "$SCRIPT_PATH" --no-pager \
+    < <(printf 'first\nsecond\n/retry\n')
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 3 ]
+  local third
+  third=$(sed -n 3p "$CLAUDE_STUB_LOG")
+  [[ "$third" == *"--resume retry-001 --resume-session-at uuid-answer-1 "* ]]
+  [[ "$third" == *"| second" ]]
+}
+
+@test "chat: /retry after a failed first question starts a new session" {
+  export CLAUDE_STUB_FIXTURE="$FIXTURES_DIR/retry_answer.jsonl"
+  export CLAUDE_STUB_FAIL_CALL=1
+  CLAUDE_ASK_FORCE_INTERACTIVE=1 run --separate-stderr "$SCRIPT_PATH" --no-pager \
+    < <(printf 'first\n/retry\n')
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 2 ]
+  [[ "$(sed -n 2p "$CLAUDE_STUB_LOG")" != *"--resume"* ]]
+  [[ "$(sed -n 2p "$CLAUDE_STUB_LOG")" == *"| first" ]]
+  [ "$(jq -r '.turns[0].assistant_uuid' "$SESSION_DIR/first.json")" = "uuid-answer-1" ]
+}
+
+@test "chat: /retry in a session saved without message ids refuses" {
+  old_session legacy 5
+  export CLAUDE_STUB_FAIL_CALL=1
+  CLAUDE_ASK_FORCE_INTERACTIVE=1 run --separate-stderr "$SCRIPT_PATH" --no-pager -r \
+    < <(printf 'again\n/retry\n')
+  [[ "$stderr" == *"saved before /retry could leave a turn out"* ]]
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
+}
+
 # ---------------------------------------------------------------------------
 # --resume
 # ---------------------------------------------------------------------------

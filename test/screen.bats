@@ -6,6 +6,12 @@ bats_require_minimum_version 1.5.0
 
 load test_helper
 
+# One tmux server name for the whole file: its tests run one at a time, even
+# with bats --jobs (the other files still run beside them)
+setup_file() {
+  export BATS_NO_PARALLELIZE_WITHIN_FILE=true
+}
+
 setup() {
   common_setup
   command -v tmux > /dev/null || skip "tmux is not installed"

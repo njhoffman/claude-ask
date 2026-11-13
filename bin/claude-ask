@@ -192,7 +192,7 @@ debug_log() {
 # CLI argument parsing
 # ---------------------------------------------------------------------------
 # In the script itself, so a copy of it knows; a test keeps it the same as VERSION
-CLAUDE_ASK_VERSION="0.15.5"
+CLAUDE_ASK_VERSION="0.16.0"
 print_version() {
   printf 'claude-ask %s\n' "$CLAUDE_ASK_VERSION"
 }
@@ -1771,11 +1771,12 @@ yank_text() {
     "${to[0]}${to[1]:+ and ${to[1]}}" "$RST" >&2
 }
 
-# yank_answer ANSWER answer|code [N]: copy the answer, all its code blocks
-# (a blank line between them) or only the Nth. The last newline is left
-# off, so a pasted command does not run before it can be read.
+# yank_answer ANSWER answer|code [N] [NOTE]: copy the answer, all its code
+# blocks (a blank line between them) or only the Nth. The last newline is left
+# off, so a pasted command does not run before it can be read. NOTE is added
+# to what the message says was copied ("(partial: interrupted)").
 yank_answer() {
-  local answer="$1" mode="$2" n="${3:-}" text="" what block count
+  local answer="$1" mode="$2" n="${3:-}" note="${4:-}" text="" what block count
   if [[ -z "$answer" ]]; then
     echo "claude-ask: there is no answer to yank" >&2
     return 1
@@ -1806,7 +1807,7 @@ yank_answer() {
     what="the answer"
   fi
   while [[ "$text" == *$'\n' ]]; do text="${text%$'\n'}"; done
-  yank_text "$text" "$what"
+  yank_text "$text" "$what${note:+ $note}"
 }
 
 # session_file_ok FILE: whether FILE is one JSON object; if not, says so
@@ -1858,7 +1859,7 @@ split_direction() {
 # ---------------------------------------------------------------------------
 # Tab completion at the chat prompt
 # ---------------------------------------------------------------------------
-CHAT_COMMANDS=(/help /effort /model /theme /yank /status /new /editor /exit /quit)
+CHAT_COMMANDS=(/help /effort /model /theme /yank /retry /status /new /editor /exit /quit)
 
 # chat_complete LINE POINT: what Tab does with the cursor at POINT in LINE.
 # A /command name before the cursor, or the argument of /effort, /model,
@@ -1922,6 +1923,14 @@ SESSION_TURNS_JQ='
     else [{question, answer, is_error: (.is_error // false), thinking,
            cost_usd, duration_ms, duration_api_ms, usage, timestamp}]
     end;'
+
+# For /retry, of a session with turns: the last answered turn's assistant
+# message (claude resumes there) and whether any turn was answered
+# shellcheck disable=SC2016 # jq program
+CONV_ANSWER_JQ='
+  def answered: [.turns[]? | select(.is_error != true and (.answer // "") != "")];
+  def last_answer_uuid: answered | last | .assistant_uuid // "";
+  def has_answer: if (answered | length) > 0 then 1 else 0 end;'
 
 # Build one turn from a raw stream (NUL-free, one JSON event per line) and add
 # it to $prev (the existing session, or none). The init event, not the first
@@ -2011,6 +2020,10 @@ SESSION_JQ="${SESSION_TURNS_JQ}"'
       duration_api_ms: since($counts.totals.duration_api_ms; $before.duration_api_ms),
       usage: $counts.usage,
       totals: $counts.totals,
+      # The last top-level assistant message, for /retry: claude resumes a
+      # session at it with --resume-session-at, leaving out what came after
+      assistant_uuid: ([$events[] | select(.type == "assistant" and (.error | not)
+                         and (.parent_tool_use_id == null)) | .uuid | strings] | last),
       timestamp: (now | todate)
     } as $turn
   # Parenthesized: jq 1.7 binds "as" tighter than "+" (1.8 does not)
@@ -3149,6 +3162,8 @@ fi
 # ---------------------------------------------------------------------------
 CONV_FILE=""
 CONV_SESSION_ID=""
+CONV_ASSISTANT_UUID="" # the last answer's message, where /retry resumes
+CONV_HAS_ANSWER=0      # a turn was answered: a /retry keeps the session
 CONV_TURNS=0
 CONV_COST=""
 CONV_INFO=""
@@ -3158,8 +3173,14 @@ LAST_TURN_STATUS=0
 # -r took from the session, which is retried with the default if it is gone.
 MODEL_GOOD=""
 MODEL_RESTORED=0
-# The conversation's last answer, for /yank
+# The conversation's last answer, for /yank, and what /yank says it is when it
+# is not the last question's whole answer
 LAST_ANSWER=""
+LAST_ANSWER_NOTE=""
+# The last question asked, and whether it was answered, for /retry
+LAST_QUESTION=""
+LAST_QUESTION_DONE=0
+RETRYING=0
 # The model of the last answer (short name) and the -m or /model it was
 # asked with, for the chat prompt
 LAST_MODEL=""
@@ -3171,7 +3192,13 @@ LAST_MODEL_FOR=""
 ask_once() {
   local q="$1" line claude_status=0 saved_file total
   local claude_args=(--output-format stream-json --verbose --include-partial-messages -p)
-  if [[ -n "$CONV_SESSION_ID" ]]; then
+  # A retry goes on from the last answer, so claude does not see the question
+  # twice: an interrupted or failed turn stays in claude's session, after it.
+  # With no answer yet there is nothing to keep, and a new session starts.
+  # --resume-session-at is not in claude --help; just smoke checks it.
+  if ((RETRYING)) && [[ -n "$CONV_ASSISTANT_UUID" ]]; then
+    claude_args+=(--resume "$CONV_SESSION_ID" --resume-session-at "$CONV_ASSISTANT_UUID")
+  elif [[ -n "$CONV_SESSION_ID" ]] && ! ((RETRYING && !CONV_HAS_ANSWER)); then
     claude_args+=(--resume "$CONV_SESSION_ID")
   fi
   if [[ -n "$EFFORT" ]]; then claude_args+=(--effort "$EFFORT"); fi
@@ -3185,6 +3212,8 @@ ask_once() {
   reset_stream_state
   STREAM_START=$SECONDS
   TURN_INTERRUPTED=0
+  LAST_QUESTION="$q"
+  LAST_QUESTION_DONE=0
   CONV_INFO=""
   if ((CONV_TURNS > 0)); then CONV_INFO="turn $((CONV_TURNS + 1))"; fi
 
@@ -3215,10 +3244,17 @@ ask_once() {
 
   if [[ "$STREAM_OUTPUT" -eq 1 ]]; then render_flush; fi
 
-  # An interrupted answer is not saved: claude sent no result for it
+  # An interrupted answer is not saved: claude sent no result for it. /yank
+  # can still have what was shown, or says it has the answer from before
   if ((TURN_INTERRUPTED)); then
     printf '%s\n%s(interrupted)%s\n' "$CLEAR_BELOW" "$FG_DIM" "$RST" >&"$BAR_FD"
     STATUS_BAR_VISIBLE=0
+    if [[ -n "$answer_text" ]]; then
+      LAST_ANSWER="$answer_text"
+      LAST_ANSWER_NOTE="(partial: interrupted)"
+    elif [[ -n "$LAST_ANSWER" ]]; then
+      LAST_ANSWER_NOTE="(from before: the last was interrupted before any text)"
+    fi
     return 130
   fi
 
@@ -3254,10 +3290,13 @@ ask_once() {
       CONV_FILE="$saved_file"
       local fields=()
       # The stream reports running totals: the bar shows what this turn added
-      mapfile -t fields < <(jq -r '.turn_count, (.cost_usd // ""),
-        (.turns[-1] | (.cost_usd // ""), (.usage.input_tokens // ""), (.usage.output_tokens // ""))' "$CONV_FILE")
+      mapfile -t fields < <(jq -r "${CONV_ANSWER_JQ}"'.turn_count, (.cost_usd // ""),
+        (.turns[-1] | (.cost_usd // ""), (.usage.input_tokens // ""), (.usage.output_tokens // "")),
+        last_answer_uuid, has_answer' "$CONV_FILE")
       CONV_TURNS="${fields[0]:-1}"
       CONV_COST="${fields[1]:-}"
+      CONV_ASSISTANT_UUID="${fields[5]:-}"
+      CONV_HAS_ANSWER="${fields[6]:-0}"
       if [[ -n "${fields[2]:-}" ]]; then cost="${fields[2]}"; fi
       if [[ -n "${fields[3]:-}" ]]; then input_tokens="${fields[3]}"; fi
       if [[ -n "${fields[4]:-}" ]]; then output_tokens="${fields[4]}"; fi
@@ -3284,8 +3323,14 @@ ask_once() {
     if [[ -s "$CLAUDE_STDERR" ]]; then
       sed 's/^/  /' "$CLAUDE_STDERR" >&2
     fi
+    if [[ -n "$LAST_ANSWER" ]]; then LAST_ANSWER_NOTE="(from before: the last question failed)"; fi
+    if ((RETRYING)) && grep -q -e '--resume-session-at' "$CLAUDE_STDERR" 2> /dev/null; then
+      echo "claude-ask: this claude does not take --resume-session-at, which /retry needs" >&2
+    fi
     return 1
   fi
+  LAST_QUESTION_DONE=1
+  LAST_ANSWER_NOTE=""
   MODEL_GOOD="$MODEL"
   MODEL_RESTORED=0
   LAST_ANSWER="${answer_text:-$result_text}"
@@ -3430,11 +3475,12 @@ resume_session() {
   fi
 
   session_file_ok "$file" || return 1
-  mapfile -d '' -t fields < <(jq -j "${SESSION_TURNS_JQ}"'
+  mapfile -d '' -t fields < <(jq -j "${SESSION_TURNS_JQ}${CONV_ANSWER_JQ}"'
     (turns_of | last) as $last
     | [(.session_id // ""), (turns_of | length), (.cost_usd // ""), (.cwd // ""),
        ($last.effort // ""), ($last.model_option // ""), ($last.answer // ""),
-       ($last.model // .model // ""), ($last.claude_args // [] | tojson)]
+       ($last.model // .model // ""), ($last.claude_args // [] | tojson),
+       ({turns: turns_of} | last_answer_uuid), ({turns: turns_of} | has_answer)]
     | map(tostring | clean + "\u0000") | add' "$file")
   if [[ -z "${fields[0]:-}" ]]; then
     echo "claude-ask: $(basename "$file" .json) has no session id and cannot be resumed" >&2
@@ -3444,6 +3490,8 @@ resume_session() {
   CONV_SESSION_ID="${fields[0]}"
   CONV_TURNS="${fields[1]:-1}"
   CONV_COST="${fields[2]:-}"
+  CONV_ASSISTANT_UUID="${fields[9]:-}"
+  CONV_HAS_ANSWER="${fields[10]:-0}"
   # -e, -m and the environment win over what the session was last asked with
   if [[ -z "$EFFORT" ]]; then EFFORT="${fields[4]:-}"; fi
   LAST_ANSWER="${fields[6]:-}"
@@ -3495,6 +3543,9 @@ chat_help() {
                    default
 /theme [NAME]      show or set the status bar theme: ${THEMES[*]}
 /yank [code [N]]   copy the last answer, its code blocks, or only block N
+                   (an interrupted answer as far as it got)
+/retry             ask a failed or interrupted question again, with the
+                   effort and model set now
 /status            the conversation, model, effort and theme
 /new               start a new conversation
 /editor, \\e        compose the question in \$EDITOR
@@ -3520,7 +3571,8 @@ passed to claude: ${CLAUDE_ARGS[*]}}"
 
 # chat_command LINE: run a slash command typed at the chat prompt. Returns 0
 # when LINE was a command, 1 when it is a question (not a "/word" first, so
-# "/etc/hosts: what is this?" is still asked), 2 for /exit and /quit.
+# "/etc/hosts: what is this?" is still asked), 2 for /exit and /quit, 3 for
+# /retry when the last question can be asked again (chat_loop asks it).
 chat_command() {
   local cmd="${1%%[[:space:]]*}" arg=""
   [[ "$cmd" =~ ^/[a-z]+$ ]] || return 1
@@ -3569,21 +3621,38 @@ chat_command() {
       ;;
     /yank)
       if [[ -z "$arg" ]]; then
-        yank_answer "$LAST_ANSWER" answer || true
+        yank_answer "$LAST_ANSWER" answer "" "$LAST_ANSWER_NOTE" || true
       elif [[ "$arg" =~ ^code([[:space:]]+([1-9][0-9]*))?$ ]]; then
-        yank_answer "$LAST_ANSWER" code "${BASH_REMATCH[2]}" || true
+        yank_answer "$LAST_ANSWER" code "${BASH_REMATCH[2]}" "$LAST_ANSWER_NOTE" || true
       else
         echo "claude-ask: /yank takes nothing, code, or code N" >&2
       fi
       ;;
     /status) chat_status ;;
+    /retry)
+      if [[ -n "$arg" ]]; then
+        echo "claude-ask: /retry takes nothing (set /effort or /model first)" >&2
+      elif [[ -z "$LAST_QUESTION" ]]; then
+        echo "claude-ask: no question has been asked in this chat to retry" >&2
+      elif ((LAST_QUESTION_DONE)); then
+        echo "claude-ask: the last question was answered; ask it again to have it answered again with that answer in view" >&2
+      elif [[ -n "$CONV_SESSION_ID" && -z "$CONV_ASSISTANT_UUID" ]] && ((CONV_HAS_ANSWER)); then
+        echo "claude-ask: this session was saved before /retry could leave a turn out; ask the question again" >&2
+      else
+        return 3
+      fi
+      ;;
     /new)
       CONV_FILE=""
       CONV_SESSION_ID=""
+      CONV_ASSISTANT_UUID=""
+      CONV_HAS_ANSWER=0
       CONV_TURNS=0
       CONV_COST=""
       CONV_INFO=""
       LAST_ANSWER=""
+      LAST_ANSWER_NOTE=""
+      LAST_QUESTION=""
       chat_note "new conversation"
       ;;
     *) echo "claude-ask: unknown command $cmd (/help lists them)" >&2 ;;
@@ -3801,19 +3870,26 @@ chat_loop() {
         rc=0
         chat_command "$trimmed" || rc=$?
         if ((rc == 2)); then break; fi
-        if ((rc == 0)); then
+        if ((rc == 0 || rc == 3)); then
           history -s "$trimmed"
           history -a 2> /dev/null || true
-          continue
         fi
+        if ((rc == 0)); then continue; fi
         ;;
     esac
 
-    history -s "${line//$'\n'/$CHAT_NEWLINE_MARK}"
-    history -a 2> /dev/null || true
+    if ((rc == 3)); then
+      line="$LAST_QUESTION"
+      RETRYING=1
+      chat_note "retrying: ${line%%$'\n'*}"
+    else
+      history -s "${line//$'\n'/$CHAT_NEWLINE_MARK}"
+      history -a 2> /dev/null || true
+    fi
 
     rc=0
     ask_once "$line" || rc=$?
+    RETRYING=0
     if ((rc != 130)); then LAST_TURN_STATUS=$rc; fi
     printf '\n' >&"$BAR_FD"
   done

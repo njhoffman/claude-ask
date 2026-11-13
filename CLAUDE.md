@@ -12,7 +12,12 @@ through a pager with a themed status bar redrawn just below the streamed text
 - `just smoke` tries the real `claude` (a few haiku requests); never run by
   `just test` or CI.
 - `just install` symlinks `bin/claude-ask` into `~/.local/bin` and writes what
-  `--completions` prints where zsh, bash-completion and fish look.
+  `--completions` prints where zsh, bash-completion and fish look; `just uninstall`
+  removes them. Both run `scripts/install`, which holds the one list of paths
+  (`test/install.bats` runs it with a temp `HOME`, so `just` is not needed).
+- `scripts/release-notes X.Y.Z` prints a version's `CHANGELOG.md` section;
+  `.github/workflows/release.yml` publishes it as the GitHub release of each `v*`
+  tag (and checks the tag matches `VERSION`).
 
 ## Architecture
 
@@ -73,7 +78,7 @@ through a pager with a themed status bar redrawn just below the streamed text
   there. `test/chat_terminal.bats` drives a pseudo-terminal
   with `test/helpers/pty_run.py`.
   `chat_command` runs the `/word` commands (`/help`, `/effort`, `/model`,
-  `/theme`, `/yank`, `/status`, `/new`, `/exit`, `/quit`; `/editor` and `\\e` are
+  `/theme`, `/yank`, `/retry`, `/status`, `/new`, `/exit`, `/quit`; `/editor` and `\\e` are
   handled in `chat_loop`, which needs the composed text); a first word that is not `/[a-z]+`
   is a question.
 - **Effort and model**: `EFFORT` and `MODEL` (`-e`, `-m`, `CLAUDE_ASK_EFFORT`,
@@ -84,11 +89,21 @@ through a pager with a themed status bar redrawn just below the streamed text
   restores the last two when not given. An `assistant` event's `error`
   becomes `api_error`; on `model_not_found` `ask_once` saves nothing and
   falls back to `MODEL_GOOD` (retrying once when `MODEL_RESTORED`).
+- **Retry**: `/retry` (`chat_command` returns 3, `chat_loop` asks `LAST_QUESTION`
+  with `RETRYING`) only when `LAST_QUESTION_DONE` is 0. `claude` keeps an
+  interrupted or failed turn in its session (checked with the real CLI), so a retry
+  resumes with `--resume-session-at CONV_ASSISTANT_UUID`, the last answered turn's
+  last top-level assistant message (`assistant_uuid` in each turn, `CONV_ANSWER_JQ`).
+  No answered turn yet: a new session. A file from before `assistant_uuid`: refused.
+  The flag is not in `claude --help`; `just smoke` checks it. Ordinary turns after
+  an interrupt still resume plainly, so claude knows what was interrupted.
 - **Yank**: `extract_code_blocks` (fills `CODE_BLOCKS`), `yank_answer`,
   `yank_text` (clipboard via `clipboard_cmd`, plus `tmux load-buffer -w`, else
   `osc52_copy` to `/dev/tty`; tests use `setsid` to have no terminal).
   `LAST_ANSWER` is the result text of the last turn (or the session's last
-  answer after `-r`). `YANK_PREVIOUS`: `-y`/`-Y` with no question.
+  answer after `-r`); after Ctrl-C it is the text shown so far, and
+  `LAST_ANSWER_NOTE` says so in `/yank`'s message (or that the answer is from
+  before, after an interrupt with no text or a failure). `YANK_PREVIOUS`: `-y`/`-Y` with no question.
 - **tmux**: `launch_in_tmux` re-runs the script with `split-window` or
   `display-popup`, passing options, as one command (`shell_command`: tmux 3.2's
   popup has no `-e` and takes one word, and it runs in the user's shell). tmux uses the server's environment, so all
@@ -200,7 +215,8 @@ through a pager with a themed status bar redrawn just below the streamed text
   in `--help`, so a new option needs adding to all three.
 - CI: `.github/workflows/ci.yml` runs `just lint` and `just test` on
   Ubuntu 24.04 and 22.04, the older tools (jq 1.6, bash 5.1, tmux 3.2, fish 3.3, with
-  a newer bats), so anything used must work there.
+  the newest bats, from `bats-core/bats-action`), so anything used must work there.
+  `.github/dependabot.yml` proposes new versions of the actions monthly.
 
 ## Versioning
 

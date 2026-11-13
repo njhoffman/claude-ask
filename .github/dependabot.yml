@@ -1,0 +1,10 @@
+# New versions of the actions the workflows use, as pull requests. bats on
+# Ubuntu 22.04 is always the newest release (see ci.yml), so it needs none.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci

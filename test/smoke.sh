@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A smoke test against the real claude, which the tests replay fixtures in place
-# of: `just smoke`. It makes three haiku requests, about a cent, and leaves
+# of: `just smoke`. It makes four haiku requests, about a cent, and leaves
 # throwaway sessions under ~/.claude/projects. Sessions go to a temp directory.
 set -euo pipefail
 
@@ -32,7 +32,7 @@ has() { [[ "$1" == *"$2"* ]]; }
 no_escapes() { [[ "$1" != *$'\e'* ]]; }
 saved_is() { jq -e --argjson result "$result" "$1" "$file" > /dev/null; }
 
-printf 'asking (1 of 3)...\n'
+printf 'asking (1 of 4)...\n'
 first=$(ask --save-raw "Reply with exactly this word and nothing else: pineapple" 2> "$work/err1") || {
   cat "$work/err1" >&2
   check "a first answer" false
@@ -53,7 +53,7 @@ if [[ -n "$file" ]]; then
   check "text came as partial messages" grep -q '"text_delta"' "$raw"
 fi
 
-printf 'resuming (2 of 3)...\n'
+printf 'resuming (2 of 4)...\n'
 second=$(ask --save-raw -r "Which word did I ask you to reply with? Reply with only that word." 2> "$work/err2") || {
   cat "$work/err2" >&2
   check "a resumed answer" false
@@ -63,7 +63,7 @@ if [[ -n "$file" ]]; then
   check "the turn joined the same file" test "$(jq -r '.turn_count // 0' "$file")" = 2
 fi
 
-printf 'through a file, from another directory (3 of 3)...\n'
+printf 'through a file, from another directory (3 of 4)...\n'
 (cd "$work" && ask --save-raw -r "Reply with exactly: done" > "$work/out" 2> "$work/err3") || cat "$work/err3" >&2
 check "the answer went to the file" has "$(tr '[:upper:]' '[:lower:]' < "$work/out")" "done"
 check "the file has no escape codes" no_escapes "$(cat "$work/out")"
@@ -78,6 +78,17 @@ if [[ -n "$file" ]]; then
   check "the saved tokens are claude's last total" saved_is \
     '.usage.output_tokens == ($result.modelUsage | map_values(.outputTokens) | add)'
   printf 'cost: $%s\n' "$(jq -r '.cost_usd // "?"' "$file")"
+
+  # /retry resumes at a turn's last answer with --resume-session-at, which
+  # claude --help does not list: branching at the first turn leaves out the rest
+  printf 'resuming at the first answer, as /retry does (4 of 4)...\n'
+  uuid=$(jq -r '.turns[0].assistant_uuid // ""' "$file")
+  check "the first turn saved its answer's message id" test -n "$uuid"
+  branch=$("${CLAUDE_ASK_BIN:-claude}" -p --model haiku --output-format json \
+    --resume "$(jq -r .session_id "$file")" --resume-session-at "$uuid" \
+    <<< "Did I ever ask you to reply with exactly: done? Reply with only yes or no." \
+    2> "$work/err4" | jq -r '.result // ""') || cat "$work/err4" >&2
+  check "--resume-session-at leaves out the later turns" has "${branch,,}" no
 fi
 if ((failed)); then
   printf 'smoke test FAILED\n' >&2

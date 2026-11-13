@@ -206,3 +206,52 @@ pty_chat() {
   [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 1 ]
   grep -qF '| quick one' "$CLAUDE_STUB_LOG"
 }
+
+@test "pty: /yank after Ctrl-C copies what was shown, and says it is partial" {
+  export CLAUDE_STUB_DELAY=0.15
+  export CLAUDE_STUB_FIXTURES="$FIXTURES_DIR/retry_answer.jsonl $FIXTURES_DIR/retry_slow.jsonl"
+  pty_chat 'expect:> ' 'send:first\r' 'expect:Answer one.' 'expect:> ' \
+    'send:slow\r' 'expect:Partial text so far.' 'send:\x03' 'expect:(interrupted)' 'expect:> ' \
+    'send:/yank\r' 'expect:yanked' 'expect:> ' 'send:/yank code\r' 'expect:yanked' 'expect:> ' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  [[ "$output_clean" == *"yanked the answer (partial: interrupted)"* ]]
+  # The code block was cut off, and is copied as far as it went
+  [[ "$output_clean" == *"yanked 1 code block (partial: interrupted)"* ]]
+  [ "$(cat "$TEST_TEMP_DIR/clipboard")" = "echo partial" ]
+}
+
+@test "pty: /yank after Ctrl-C before any text says the answer is from before" {
+  export CLAUDE_STUB_DELAY=0.15
+  export CLAUDE_STUB_FIXTURES="$FIXTURES_DIR/retry_answer.jsonl $FIXTURES_DIR/retry_notext.jsonl"
+  pty_chat 'expect:> ' 'send:first\r' 'expect:Answer one.' 'expect:> ' \
+    'send:slow\r' 'expect:connecting' 'sleep:0.5' 'send:\x03' 'expect:(interrupted)' 'expect:> ' \
+    'send:/yank\r' 'expect:yanked' 'expect:> ' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  [[ "$output_clean" == *"yanked the answer (from before: the last was interrupted before any text)"* ]]
+  [ "$(cat "$TEST_TEMP_DIR/clipboard")" = "Answer one." ]
+}
+
+@test "pty: /retry after Ctrl-C asks again from the last answer" {
+  export CLAUDE_STUB_DELAY=0.15
+  export CLAUDE_STUB_FIXTURES="$FIXTURES_DIR/retry_answer.jsonl $FIXTURES_DIR/retry_slow.jsonl $FIXTURES_DIR/retry_after.jsonl"
+  pty_chat 'expect:> ' 'send:first\r' 'expect:Answer one.' 'expect:> ' \
+    'send:slow\r' 'expect:Partial text so far.' 'send:\x03' 'expect:(interrupted)' 'expect:> ' \
+    'send:/effort high\r' 'expect:> ' 'send:/retry\r' 'expect:Answer two.' 'expect:> ' \
+    'send:/yank\r' 'expect:yanked' 'expect:> ' 'send:exit\r'
+  [ "$status" -eq 0 ]
+  [[ "$output_clean" == *"retrying: slow"* ]]
+  [ "$(wc -l < "$CLAUDE_STUB_LOG")" -eq 3 ]
+  # The interrupted turn is left out of claude's session, and the effort set since is used
+  local third
+  third=$(sed -n 3p "$CLAUDE_STUB_LOG")
+  [[ "$third" == *"--resume retry-001 --resume-session-at uuid-answer-1 "* ]]
+  [[ "$third" == *"--effort high"* ]]
+  [[ "$third" == *"| slow" ]]
+  # The new answer is whole again
+  [[ "$output_clean" == *"yanked the answer (1 lines)"* ]]
+  # Saved: two answered turns, the second the retried question
+  local f="$SESSION_DIR/first.json"
+  [ "$(jq -r '.turn_count' "$f")" = "2" ]
+  [ "$(jq -r '.turns[1].question' "$f")" = "slow" ]
+  [ "$(jq -r '.turns[1].assistant_uuid' "$f")" = "uuid-answer-2" ]
+}

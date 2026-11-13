@@ -143,6 +143,7 @@ In a chat, these commands work at the prompt:
 | `/model [NAME]`   | show or set the model; `default` clears it               |
 | `/theme [NAME]`   | show or set the status bar theme                         |
 | `/yank [code [N]]` | copy the last answer, its code blocks, or block N       |
+| `/retry`          | ask a failed or interrupted question again               |
 | `/status`         | the conversation, model, effort and theme                |
 | `/new`            | start a new conversation (a new session file)            |
 | `/editor`, `\e`   | compose the question in `$EDITOR`                        |
@@ -151,7 +152,12 @@ In a chat, these commands work at the prompt:
 A line whose first word is some other `/word` is refused as an unknown
 command; one like `/etc/hosts: what is this?` is asked as a question.
 Ctrl-C stops the answer being streamed without leaving the chat; at the
-prompt it clears the line, as a shell does. Lines typed during an answer wait at
+prompt it clears the line, as a shell does. `/yank` then copies the answer as far
+as it got, and says it is partial. `/retry` asks the question again, with the
+`/effort` and `/model` set since, and `claude` sees it once: the interrupted or
+failed turn is left out of its session (`--resume-session-at`, which `claude
+--help` does not list; `just smoke` checks it). It does not ask again a question
+that was answered: ask it yourself, and `claude` will see the answer it gave. Lines typed during an answer wait at
 the next prompt, joined with `⏎`, until you press Enter. Questions are kept in
 `~/.local/state/claude-ask/history` for the up arrow; a multi-line one comes back
 on one line, with `⏎` for each line break. Each conversation is one session file with a `turns` list;
@@ -190,6 +196,7 @@ the new run reads and deletes, so API keys stay out of the process list.
 
 ```sh
 just install    # symlinks bin/claude-ask into ~/.local/bin, writes the completions
+just uninstall  # removes them again (the symlink only if it is into this checkout)
 ```
 
 `--completions bash`, `zsh` or `fish` prints a completion script for the options,
@@ -213,7 +220,9 @@ script: run `just install` again after an update, or use the lines above.
 ## Development
 
 `just test` runs the bats suite in `test/`; `just lint` runs shellcheck;
-`just smoke` tries the real `claude` with three haiku requests, about a cent.
+`just smoke` tries the real `claude` with four haiku requests, about a cent.
+Each tag `vX.Y.Z` gets a GitHub release with its `CHANGELOG.md` section
+(`scripts/release-notes X.Y.Z` prints it).
 The tests never call the real `claude`: `test/stubs/claude` replays a
 fixture from `test/fixtures/`.
 `docs/claude-ask.example.json` is a recorded stream-json session for reference.
